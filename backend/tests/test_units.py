@@ -67,3 +67,23 @@ def test_import_rejects_bad_extension(tmp_path):
     import pytest
     with pytest.raises(media.MediaError):
         media.validate_extension(tmp_path / "x.txt", (".wav",))
+
+
+def test_qwen3_adapter_with_fake_model(tmp_path):
+    from pathlib import Path
+    from app.engines.base import TTSRequest
+    from app.engines.tts.engines import Qwen3TTS
+
+    class Fake:
+        calls = []
+        def generate_voice_clone(self, **kw):
+            Fake.calls.append(kw)
+            return [np.zeros(24000, dtype="float32")], 24000
+
+    eng = Qwen3TTS(model=Fake())
+    out = tmp_path / "o.wav"
+    dur = eng.synthesize(TTSRequest("Olá", "pt-BR", [Path("ref.wav")], out, reference_text="texto de la muestra"))
+    assert dur == 1.0 and out.exists()
+    assert Fake.calls[0]["language"] == "Portuguese" and Fake.calls[0]["ref_text"] == "texto de la muestra"
+    eng.synthesize(TTSRequest("Hi", "en-US", [Path("ref.wav")], out))
+    assert Fake.calls[1]["language"] == "English" and Fake.calls[1]["x_vector_only_mode"] is True

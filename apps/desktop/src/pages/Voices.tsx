@@ -8,10 +8,11 @@ export default function Voices() {
   const [name, setName] = useState("");
   const [paths, setPaths] = useState("");
   const [consent, setConsent] = useState(false);
+  const [refText, setRefText] = useState("");
   const list = useQuery({ queryKey: ["voices"], queryFn: () => api<Voice[]>("/voices") });
   const create = useMutation({
-    mutationFn: () => post("/voices", { name, sample_paths: paths.split("\n").map((s) => s.trim()).filter(Boolean), consent_confirmed: consent }),
-    onSuccess: () => { setName(""); setPaths(""); setConsent(false); void qc.invalidateQueries({ queryKey: ["voices"] }); } });
+    mutationFn: () => post("/voices", { name, sample_paths: paths.split("\n").map((s) => s.trim()).filter(Boolean), consent_confirmed: consent, reference_text: refText || undefined }),
+    onSuccess: () => { setName(""); setPaths(""); setRefText(""); setConsent(false); void qc.invalidateQueries({ queryKey: ["voices"] }); } });
   const remove = useMutation({ mutationFn: (id: number) => del(`/voices/${id}`), onSuccess: () => qc.invalidateQueries({ queryKey: ["voices"] }) });
   const valid = name.trim() && paths.trim() && consent;
   return (
@@ -20,6 +21,7 @@ export default function Voices() {
       <form className="card space-y-3 mb-6" onSubmit={(e) => { e.preventDefault(); if (valid) create.mutate(); }}>
         <input className="input" aria-label="Nombre del perfil" placeholder="Nombre del perfil" value={name} onChange={(e) => setName(e.target.value)} />
         <textarea className="input" rows={3} aria-label="Muestras" placeholder="Una ruta de audio por línea (WAV/MP3/FLAC/M4A, ≥ 5 s, sin ruido de fondo)" value={paths} onChange={(e) => setPaths(e.target.value)} />
+        <textarea className="input" rows={2} aria-label="Texto de la muestra" placeholder="Opcional: lo que se dice en la primera muestra, palabra por palabra (mejora la clonación con Qwen3-TTS)" value={refText} onChange={(e) => setRefText(e.target.value)} />
         <label className="text-sm flex gap-2"><input type="checkbox" checked={consent} onChange={(e) => setConsent(e.target.checked)} />Confirmo que soy el titular de esta voz o tengo su autorización expresa.</label>
         <button className="btn" disabled={!valid || create.isPending}>Crear perfil</button>
         <ErrorNote error={create.error ?? remove.error} />

@@ -1,0 +1,3 @@
+# Opcional: motor TTS Qwen3-TTS. Instala PyTorch cu128 antes (docs/INSTALLATION.md).
+# El nombre del paquete sale del README oficial; verifícalo con `pip index versions qwen-tts`.
+qwen-tts

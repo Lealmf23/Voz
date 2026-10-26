@@ -31,6 +31,8 @@ pip install -r backend\requirements\ai.txt
 ```
 `chatterbox-tts` puede fijar otra versión de torch y sustituir tu wheel cu128. Si pasa, vuelve a instalar el wheel cu128 y repite `validate_hardware.py`. Los pesos se descargan al primer uso.
 
+Qwen3-TTS (opcional, alternativa a Chatterbox): `pip install -r backend\requirements\qwen.txt`. Compara ambos con tu voz: `python scripts\compare_tts.py mi_voz.wav salida --ref-text "lo que dices en la muestra"`.
+
 Prueba de viabilidad de la voz (la prueba más importante):
 ```
 python scripts\voice_clone_test.py mi_voz.wav salida

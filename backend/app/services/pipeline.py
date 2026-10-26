@@ -82,11 +82,13 @@ def translate(db: Session, p: Project, lang: str, engine_id: str, job: Job, only
     return {"mock": eng.info.mock}
 
 
-def _voice_refs(db: Session, p: Project) -> list[Path]:
+def _voice_refs(db: Session, p: Project) -> tuple[list[Path], str | None]:
     if not p.voice_profile_id:
-        return []
+        return [], None
     vp = db.get(VoiceProfile, p.voice_profile_id)
-    return [Path(x) for x in (vp.samples if vp else [])]
+    if not vp:
+        return [], None
+    return [Path(x) for x in vp.samples], (vp.engine_settings or {}).get("reference_text")
 
 
 def synthesize_segment(db: Session, s: Settings, p: Project, seg: Segment, lang: str, engine_id: str) -> dict:
@@ -94,7 +96,7 @@ def synthesize_segment(db: Session, s: Settings, p: Project, seg: Segment, lang:
     if not text:
         raise ValueError("El segmento no tiene traducción")
     eng = registry.get("tts", engine_id)
-    refs = _voice_refs(db, p)
+    refs, ref_text = _voice_refs(db, p)
     if not refs and not eng.info.mock:
         raise ValueError("Selecciona un perfil vocal con muestras antes de generar")
     out_dir = project_dir(s, p) / "generated" / lang
@@ -102,7 +104,8 @@ def synthesize_segment(db: Session, s: Settings, p: Project, seg: Segment, lang:
     pr = seg.params or {}
     eng.synthesize(TTSRequest(text=text, language=lang, reference_audio=refs, out_path=raw,
                               seed=pr.get("seed"), speed=pr.get("speed", 1.0),
-                              intensity=pr.get("intensity", 1.0), emotion=pr.get("emotion", 0.5)))
+                              intensity=pr.get("intensity", 1.0), emotion=pr.get("emotion", 0.5),
+                              reference_text=ref_text))
     fit = sync.fit_segment(raw, fitted, seg.end - seg.start)
     seg.audio = {**seg.audio, lang: {"path": str(fitted), "duration": fit["duration"], "ratio": fit["ratio"],
                                      "engine": eng.info.id, "mock": eng.info.mock, "warnings": fit["warnings"]}}

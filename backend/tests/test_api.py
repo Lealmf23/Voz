@@ -56,6 +56,14 @@ def test_full_flow_with_mocks(client, narration, tmp_path):
     assert any("SIMULADO" in w for w in rep["warnings"])
 
 
+def test_voice_reference_text_is_stored(client, narration):
+    r = client.post("/api/voices", json={"name": "X", "sample_paths": [str(narration)], "consent_confirmed": True,
+                                         "reference_text": "  hola a todos  "})
+    assert r.status_code == 201
+    from app.database.db import VoiceProfile
+    assert client.app.state.db().get(VoiceProfile, r.json()["id"]).engine_settings == {"reference_text": "hola a todos"}
+
+
 def test_voice_requires_consent(client, narration):
     r = client.post("/api/voices", json={"name": "X", "sample_paths": [str(narration)], "consent_confirmed": False})
     assert r.status_code == 400

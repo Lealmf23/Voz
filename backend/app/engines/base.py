@@ -47,6 +47,7 @@ class TTSRequest:
     speed: float = 1.0
     intensity: float = 1.0
     emotion: float = 0.5
+    reference_text: str | None = None  # transcripción de la muestra (mejora la clonación en Qwen3-TTS)
     prosody_reference: Path | None = None  # solo lo usan motores que lo admiten
 
 

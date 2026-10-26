@@ -306,6 +306,7 @@ class VoiceIn(BaseModel):
     name: str = Field(min_length=1)
     sample_paths: list[str] = Field(min_length=1)
     consent_confirmed: bool
+    reference_text: str | None = None  # lo que se dice en la primera muestra
 
 
 @router.post("/voices", status_code=201)
@@ -340,6 +341,8 @@ def create_voice(body: VoiceIn, request: Request):
         samples.append(str(dst))
         quality[dst.name] = q
     vp.samples, vp.quality = samples, quality
+    if body.reference_text and body.reference_text.strip():
+        vp.engine_settings = {"reference_text": body.reference_text.strip()}
     db.commit()
     return {"id": vp.id, "name": vp.name, "quality": quality}
 

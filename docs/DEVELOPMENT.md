@@ -1,7 +1,7 @@
 # Desarrollo
 
 ```
-cd backend && pip install -r requirements/dev.txt && pytest      # 21 pruebas, motores simulados
+cd backend && pip install -r requirements/dev.txt && pytest      # 23 pruebas, motores simulados
 cd apps/desktop && npm install && npm test && npm run build       # 7 pruebas + typecheck
 ```
 
