@@ -24,3 +24,20 @@ def narration(tmp_path):
     p = tmp_path / "narracion con espacios.wav"
     sf.write(str(p), y, sr)
     return p
+
+
+@pytest.fixture(autouse=True)
+def memory_keyring(monkeypatch):
+    """Almacén de claves en memoria: los tests nunca tocan el del sistema ni usan claves reales."""
+    import keyring
+    from keyring.backend import KeyringBackend
+
+    class Mem(KeyringBackend):
+        priority = 1
+        def __init__(self): self.d = {}
+        def get_password(self, s, u): return self.d.get((s, u))
+        def set_password(self, s, u, p): self.d[(s, u)] = p
+        def delete_password(self, s, u): self.d.pop((s, u), None)
+
+    keyring.set_keyring(Mem())
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)

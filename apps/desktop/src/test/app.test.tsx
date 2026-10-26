@@ -59,3 +59,22 @@ test("Glossary: 'No traducir' desactiva los campos de traducción", async () => 
   fireEvent.click(screen.getByLabelText(/No traducir/));
   await waitFor(() => expect(screen.getByLabelText("Inglés")).toBeDisabled());
 });
+
+import { ClaudeSection } from "../pages/Settings";
+
+test("Claude: no se puede activar sin consentimiento y la clave se envía una sola vez", async () => {
+  const calls: { url: string; body?: string }[] = [];
+  vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+    calls.push({ url, body: init?.body as string | undefined });
+    return new Response(JSON.stringify({ enabled: false, consent_at: null, model: "claude-sonnet-5-5", key_set: false }), { status: 200 });
+  }));
+  wrap(<ClaudeSection />);
+  const btn = await screen.findByText("Activar");
+  fireEvent.change(screen.getByLabelText("Clave API de Anthropic"), { target: { value: "sk-ant-x" } });
+  expect(btn).toBeDisabled();
+  fireEvent.click(screen.getByRole("checkbox"));
+  expect(btn).toBeEnabled();
+  fireEvent.click(btn);
+  await waitFor(() => expect(calls.some((c) => c.body?.includes("consent_confirmed\":true"))).toBe(true));
+  expect(screen.getByText(/EN LÍNEA/)).toBeInTheDocument();
+});

@@ -36,6 +36,12 @@ Prueba de viabilidad de la voz (la prueba más importante):
 python scripts\voice_clone_test.py mi_voz.wav salida
 ```
 
+### Opcional: traducción con Claude (en línea)
+```
+pip install -r backend\requirements\cloud.txt
+```
+Luego, en la app: Configuración → Servicios externos → acepta el consentimiento y pega tu clave API. En Modelos de IA elige «Claude (API en línea)» como motor de traducción.
+
 ## 5. Interfaz
 ```
 cd apps\desktop

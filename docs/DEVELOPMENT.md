@@ -1,8 +1,8 @@
 # Desarrollo
 
 ```
-cd backend && pip install -r requirements/dev.txt && pytest      # 16 pruebas, motores simulados
-cd apps/desktop && npm install && npm test && npm run build       # 6 pruebas + typecheck
+cd backend && pip install -r requirements/dev.txt && pytest      # 21 pruebas, motores simulados
+cd apps/desktop && npm install && npm test && npm run build       # 7 pruebas + typecheck
 ```
 
 - Añadir un motor: implementa la interfaz de `engines/base.py`, regístralo en `engines/setup.py`. La UI lo lista sola.

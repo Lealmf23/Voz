@@ -6,10 +6,11 @@ Aplicación de escritorio (Windows 11) para doblar narraciones del español a en
 
 | Parte | Estado |
 |---|---|
-| Backend FastAPI (proyectos, segmentos, voces, glosario, tareas, exportación WAV 24 bit/SRT) | Implementado. 16 pruebas pasan con **motores simulados** |
+| Backend FastAPI (proyectos, segmentos, voces, glosario, tareas, exportación WAV 24 bit/SRT) | Implementado. 21 pruebas pasan con **motores simulados** |
 | Importación, silencios, niveles, time-stretch, línea de tiempo desde t=0 | Implementado y probado con audio sintético |
 | Análisis de prosodia (RMS, F0, pausas, ritmo) | Implementado. No infiere emociones |
-| Interfaz React: Dashboard, Proyectos, Estudio (tabla de segmentos, forma de onda, regenerar, A/B manual, exportar), Voces, Glosario, Modelos, Configuración | Implementada. 6 pruebas de componentes; flujo recorrido en un navegador real con motores simulados |
+| Interfaz React: Dashboard, Proyectos, Estudio (tabla de segmentos, forma de onda, regenerar, A/B manual, exportar), Voces, Glosario, Modelos, Configuración | Implementada. 7 pruebas de componentes; flujo recorrido en un navegador real con motores simulados |
+| Traducción con Claude por API (opcional, en línea, desactivada por defecto; consentimiento + clave en el almacén del sistema) | Implementada; probada **solo con un cliente simulado**, no con la API real |
 | Faster-Whisper, NLLB, Chatterbox | Adaptadores escritos, **nunca ejecutados** (sin GPU en el entorno de desarrollo) |
 | Tauri 2 (esqueleto), instalador | Archivos escritos, **sin compilar**. Sin sidecar ni diálogos nativos |
 | Gestor de modelos (instalar/verificar/eliminar), ajustes de hardware y directorios, WebSocket | **Pendiente** (la UI lo indica) |

@@ -18,7 +18,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or get_settings()
     settings.ensure_dirs()
     logging.basicConfig(level=logging.INFO)
-    register_all(settings.allow_mock_engines)
+    register_all(settings)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):

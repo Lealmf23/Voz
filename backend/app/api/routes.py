@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 from ..database.db import GlossaryTerm, Project, Segment, VoiceProfile
 from ..engines import registry
 from ..engines.base import EngineUnavailable
-from ..services import media, pipeline
+from ..services import external, media, pipeline
 from ..services.media import MediaError
 
 router = APIRouter()
@@ -391,3 +391,34 @@ def delete_term(tid: int, request: Request):
     db = _db(request)
     db.delete(_get(db, GlossaryTerm, tid))
     db.commit()
+
+
+# ---------- servicios externos (opcionales) ----------
+class ClaudeIn(BaseModel):
+    enabled: bool
+    consent_confirmed: bool = False
+    api_key: str | None = None
+    model: str | None = None
+
+
+@router.get("/external/claude")
+def claude_get(request: Request):
+    return external.claude_status(request.app.state.settings)
+
+
+@router.put("/external/claude")
+def claude_put(body: ClaudeIn, request: Request):
+    try:
+        out = external.update_claude(request.app.state.settings, body.enabled, body.consent_confirmed,
+                                     body.api_key, body.model)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    except external.SecretStoreError as e:
+        raise HTTPException(503, str(e)) from e
+    registry.unload_all()  # el motor se reconstruye con la nueva configuración
+    return out
+
+
+@router.delete("/external/claude/key", status_code=204)
+def claude_delete_key():
+    external.delete_api_key()
