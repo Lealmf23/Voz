@@ -44,3 +44,23 @@ Fecha: 2026-10-26. Fuentes: READMEs oficiales de cada proyecto y el foro de PyTo
 - https://github.com/FunAudioLLM/CosyVoice
 - https://discuss.pytorch.org/t/cuda-support-for-rtx-50x-on-windows/221309
 - https://discuss.pytorch.org/t/pytorch-support-for-sm120/216099
+
+## Actualización: búsqueda de motores expresivos en inglés y portugués (2026-10-26)
+
+Fuentes: READMEs de GitHub y resultados de búsqueda. Hugging Face no era accesible desde el entorno, así que las fichas de modelo no se leyeron. Los números de abajo son los que publica cada proyecto, no medidos por nosotros.
+
+| Motor | Portugués | Clona tu voz | Control de expresividad | Licencia | Veredicto |
+|---|---|---|---|---|---|
+| **Qwen3-TTS** (0.6B y 1.7B, ene 2026) | Lista "Portuguese" (10 idiomas: zh, en, ja, ko, de, fr, ru, pt, es, it). El README no dice si es pt-BR; una página de terceros afirma que cubre brasileño y europeo, sin verificar | Sí, con el modelo **Base**: ~3 s de audio, mejor con ref_text | Instrucciones de estilo solo en **CustomVoice** (9 voces fijas) y **VoiceDesign**. **El modelo que clona no documenta control de estilo** | Apache-2.0 | **Mejor candidato nuevo.** Publica en portugués WER 1,526 y similitud de voz 0,817 (modelo 1.7B Base); son cifras del proveedor |
+| Fish Audio S2-Pro / Drama 3 | No confirmado (dicen "~100 idiomas") | Sí, 10-30 s de audio | Etiquetas en línea: `[excited]`, `[whisper]`, `[angry]`... | Fish Audio Community/Research License (revisar uso comercial) | Expresividad interesante, pero el portugués no está confirmado y la licencia es restrictiva |
+| Higgs Audio v3 | No confirmado ("100+ idiomas") | Sí | Control en línea de emoción/estilo | Investigación y **no comercial**; el uso con ingresos exige licencia aparte | Descartado si el canal monetiza |
+| Seed-VC (conversión de voz) | Sin idiomas listados (no hace texto a voz) | Convierte el timbre de un audio a otro | V2 convierte estilo/emoción | GPL-3.0; repositorio **archivado** (nov 2025) | Idea útil (ver abajo), pero repositorio abandonado y licencia copyleft |
+| Chatterbox Multilingual (el actual) | Sí, con finetune pt-BR | Sí | Parámetro de exageración | MIT | Sigue siendo el principal hasta comparar |
+
+**Lo que se concluye**
+- Ningún motor abierto confirmado combina las tres cosas a la vez: clonar tu voz, portugués brasileño comprobado y copiar la interpretación del original.
+- **Qwen3-TTS Base** es el candidato a comparar contra Chatterbox: Apache-2.0, portugués listado, clonación con pocos segundos. Su límite documentado es que el modelo que clona no admite instrucciones de estilo.
+- Una vía alternativa para la expresividad (no probada): generar con un motor expresivo y pasar el resultado por conversión de voz hacia tu timbre. Seed-VC es la referencia, pero está archivado y es GPL-3.0.
+- **Pendiente de comprobar en tu PC:** si el portugués de Qwen3-TTS suena brasileño, cuánta VRAM usa en 12 GB (los README no dan cifras) y si funciona en Windows (no se menciona).
+
+Fuentes: https://github.com/QwenLM/Qwen3-TTS · https://github.com/fishaudio/fish-speech · https://github.com/boson-ai/higgs-audio · https://github.com/Plachtaa/seed-vc
