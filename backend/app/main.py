@@ -33,6 +33,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:1420", "tauri://localhost",
                                                       "http://tauri.localhost", "http://127.0.0.1:1420"],
                        allow_methods=["*"], allow_headers=["*"])
+
+    @app.middleware("http")
+    async def close_db_sessions(request, call_next):
+        try:
+            return await call_next(request)
+        finally:
+            for session in request.scope.get("db_sessions", []):
+                session.close()
+
     app.include_router(router, prefix="/api")
     return app
 

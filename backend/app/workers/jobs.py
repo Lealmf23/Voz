@@ -70,6 +70,7 @@ class JobQueue:
                 job.result = fn(job)
                 job.status = "completed"
                 job.progress = 1.0
+                job.done = job.total
             except Cancelled:
                 job.status = "cancelled"
             except MemoryError:

@@ -81,3 +81,11 @@ def test_real_engine_unavailable_is_reported(client, narration):
     client.post(f"/api/projects/{p['id']}/import", json={"path": str(narration)})
     j = wait(client, client.post(f"/api/projects/{p['id']}/transcribe", json={"engine": "faster-whisper"}).json())
     assert j["status"] == "error" and "faster-whisper" in j["error"]
+
+
+def test_db_sessions_are_released(client):
+    """Humo: muchas peticiones seguidas no agotan el pool. Ojo: sin el cierre de sesiones esta prueba también
+    pasa, así que no reproduce el fallo visto con el navegador; solo vigila que no empeore."""
+    p = client.post("/api/projects", json={"name": "X"}).json()
+    for _ in range(40):
+        assert client.get(f"/api/projects/{p['id']}").status_code == 200

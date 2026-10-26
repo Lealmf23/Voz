@@ -1,0 +1,7 @@
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap");
+@tailwind base; @tailwind components; @tailwind utilities;
+body { @apply bg-bg text-ink font-sans; }
+.btn { @apply px-3 py-1.5 rounded-md bg-primary text-white text-sm hover:bg-primary2 disabled:opacity-40; }
+.btn-ghost { @apply px-3 py-1.5 rounded-md border border-line text-sm text-mute hover:text-ink disabled:opacity-40; }
+.input { @apply bg-bg border border-line rounded-md px-2 py-1.5 text-sm w-full focus:outline-none focus:border-primary; }
+.card { @apply bg-surface border border-line rounded-lg p-4; }

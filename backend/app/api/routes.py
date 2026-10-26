@@ -20,7 +20,10 @@ Lang = Literal["en-US", "pt-BR"]
 
 # ---------- helpers ----------
 def _db(request: Request):
-    return request.app.state.db()
+    """Sesión ligada a la petición; el middleware de main.py la cierra al terminar."""
+    session = request.app.state.db()
+    request.scope.setdefault("db_sessions", []).append(session)
+    return session
 
 
 def _get(db, model, id_):

@@ -1,3 +1,5 @@
 # Opcional. Instalar PyTorch cu128 ANTES (ver docs/INSTALLATION.md) y verificar sm_120.
 faster-whisper>=1.0
 chatterbox-tts
+transformers>=4.40
+sentencepiece

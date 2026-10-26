@@ -6,13 +6,14 @@ Aplicación de escritorio (Windows 11) para doblar narraciones del español a en
 
 | Parte | Estado |
 |---|---|
-| Backend FastAPI (proyectos, segmentos, voces, glosario, tareas, exportación WAV 24 bit/SRT) | Implementado. 15 pruebas pasan con **motores simulados** |
+| Backend FastAPI (proyectos, segmentos, voces, glosario, tareas, exportación WAV 24 bit/SRT) | Implementado. 16 pruebas pasan con **motores simulados** |
 | Importación, silencios, niveles, time-stretch, línea de tiempo desde t=0 | Implementado y probado con audio sintético |
 | Análisis de prosodia (RMS, F0, pausas, ritmo) | Implementado. No infiere emociones |
-| Faster-Whisper, Chatterbox | Adaptadores escritos, **nunca ejecutados** (sin GPU en el entorno de desarrollo) |
-| Traducción local real | **Pendiente.** Solo existe un traductor simulado |
-| Interfaz React/Tauri | **Pendiente** |
-| Gestor de modelos, instalador, A/B | **Pendiente** |
+| Interfaz React: Dashboard, Proyectos, Estudio (tabla de segmentos, forma de onda, regenerar, A/B manual, exportar), Voces, Glosario, Modelos, Configuración | Implementada. 6 pruebas de componentes; flujo recorrido en un navegador real con motores simulados |
+| Faster-Whisper, NLLB, Chatterbox | Adaptadores escritos, **nunca ejecutados** (sin GPU en el entorno de desarrollo) |
+| Tauri 2 (esqueleto), instalador | Archivos escritos, **sin compilar**. Sin sidecar ni diálogos nativos |
+| Gestor de modelos (instalar/verificar/eliminar), ajustes de hardware y directorios, WebSocket | **Pendiente** (la UI lo indica) |
+| Línea de tiempo con arrastre de segmentos | **Pendiente**: hoy se editan tiempos vía API; la UI muestra la forma de onda y la tabla |
 
 Los motores `mock-*` no transcriben, no traducen ni clonan: sirven para probar la tubería y se marcan como SIMULADO en el informe de exportación.
 
@@ -34,3 +35,5 @@ python scripts/voice_clone_test.py mi_voz.wav salida
 ```
 
 Investigación de motores: [docs/PHASE0_RESEARCH.md](docs/PHASE0_RESEARCH.md). Los datos se guardan en `~/LealDubStudio` (variable `LEAL_DATA_DIR`). El backend solo escucha en 127.0.0.1.
+
+Interfaz: `cd apps/desktop && npm install && npm run dev` (con el backend en marcha). Más detalle en `docs/`.
