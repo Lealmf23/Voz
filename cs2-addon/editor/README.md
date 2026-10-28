@@ -16,6 +16,10 @@ paredes, retícula, planta comercial, techo, cornisas y porche, con buscador) y 
 opciones únicamente en ella. `engine.py` publica el esquema en `/schema` leyendo las propiedades del add-on, así que las opciones nuevas del
 add-on aparecen solas.
 
+Además: **Estilo** (plantillas de aspecto, estilos generales con «✎ Personalizar este estilo…» —forma, marco, divisiones, remates, hojas, balcones…
+con vista en vivo, se guardan en el proyecto como estilos propios—, colores y materiales con repetición, giro, brillo, metal y emisivo) y **Proyecto**
+(nombre, tema, nivel, categoría, variantes, texturas, UV y sombras). El motor publica `/schema`, `/style_schema` y `/style`.
+
 ## Qué se puede hacer
 - Dibujar la planta con clics (se pega a la grilla; las líneas gruesas son las celdas de 8 m de CS2), mover esquinas, doble clic para agregar,
   clic derecho para borrar; plantas rápidas (caja, L, U, T, torre redonda, frente curvo).

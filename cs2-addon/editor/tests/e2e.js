@@ -78,9 +78,16 @@ const ok = (c, m) => { console.log((c ? 'OK   ' : 'FALLA') + ' ' + m); if (!c) f
   const inp3 = p.locator('#side .sec:has-text("Solo esta pared") details input[type=number]').first(); await inp3.fill('3'); await inp3.dispatchEvent('change'); await waitR();
   ok(await ed(() => __ed.S.edges[0].wp && Object.values(__ed.S.edges[0].wp).includes(3)), 'una opción propia de la pared se guarda en esa pared');
 
-  // 7) exportar (con el retranqueo)
+  // 7) editor de estilos: forma de arco en una ventana propia
+  await p.click('#side .tabs >> text=Estilo'); await p.click('text=Personalizar este estilo… >> nth=0'); await p.waitForSelector('#sted.show');
+  await p.locator('#sted select').first().selectOption('ARCH'); await waitR();
+  ok(await ed(() => Object.values(__ed.S.custom).some(c => c.params.shape === 'ARCH')), 'el editor de estilos crea un estilo propio y se aplica');
+  await p.click('#side .tabs >> text=Proyecto');
+  ok(await p.locator('#side details').count() > 0, 'la pestaña Proyecto muestra opciones de juego y texturas');
+
+  // 8) exportar (con el retranqueo)
   const dir = '/tmp/cs2_e2e_' + Date.now();
-  const r = await p.evaluate(async d => { const rec = { ...JSON.parse(JSON.stringify({ verts: __ed.S.verts, edges: __ed.S.edges, props: __ed.S.props, floors: __ed.S.floors, floor_h: __ed.S.floor_h, roof: __ed.S.roof, props: __ed.S.props })), out: d, name: 'E2E' }; return await (await fetch('/export', { method: 'POST', body: JSON.stringify(rec) })).json(); }, dir);
+  const r = await p.evaluate(async d => { const rec = { ...JSON.parse(JSON.stringify({ verts: __ed.S.verts, edges: __ed.S.edges, props: __ed.S.props, custom_styles: __ed.S.custom, floors: __ed.S.floors, floor_h: __ed.S.floor_h, roof: __ed.S.roof, props: __ed.S.props })), out: d, name: 'E2E' }; return await (await fetch('/export', { method: 'POST', body: JSON.stringify(rec) })).json(); }, dir);
   ok(!r.error && r.tris && r.tris[2] <= 500, 'exportación OK, triángulos ' + JSON.stringify(r.tris) + (r.error ? ' ' + r.error.slice(0, 200) : ''));
   ok(errs.length === 0, 'sin errores en la consola del navegador' + (errs.length ? ': ' + errs.slice(0, 3).join(' | ') : ''));
   await b.close(); process.exit(fails ? 1 : 0);

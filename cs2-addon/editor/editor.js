@@ -16,14 +16,14 @@ const newEdge = () => ({ bulge: 0, mat: 0, rot: 0, ws: "", ds: "", bs: "", ov: {
 const NOSEL = () => ({ edge: null, sec: 0, slot: null, vert: null });
 const ES = (i, sec = 0) => sec ? ((E()[i].sx = E()[i].sx || {})[sec] = E()[i].sx[sec] || { ov: {}, add: [] }) : E()[i];
 const Wk = (i, sec = 0) => R && R.walls.find(w => w.edge === i && w.sec === sec);
-let S = { verts: [], edges: [], setbacks: [], floors: 4, floor_h: 3, roof: "FLAT_SLAB", props: { balconies: "alternate" } };
-let closed = false, R = null, CAT = null, SCH = null, online = false;
+let S = { verts: [], edges: [], setbacks: [], custom: {}, name: "Edificio01", floors: 4, floor_h: 3, roof: "FLAT_SLAB", props: { balconies: "alternate" } };
+let closed = false, R = null, CAT = null, SCH = null, STSCH = null, online = false;
 let sel = NOSEL();
 let tool = "select", brush = { win: null, door: null, bal: null };
 let snapG = 1, showRoof = true, viewMode = "both";
 const hist = { u: [], r: [] };
 const snap = () => JSON.stringify({ S, closed });
-const restore = s => { const o = JSON.parse(s); S = o.S; S.setbacks = S.setbacks || []; closed = o.closed; };
+const restore = s => { const o = JSON.parse(s); S = o.S; S.setbacks = S.setbacks || []; S.custom = S.custom || {}; S.name = S.name || "Edificio01"; closed = o.closed; };
 function commit(rebuild = true) { hist.u.push(snap()); if (hist.u.length > 100) hist.u.shift(); hist.r = []; changed(rebuild); }
 function undo() { if (hist.u.length < 2) return; hist.r.push(hist.u.pop()); restore(hist.u[hist.u.length - 1]); sel = NOSEL(); changed(true, true); }
 function redo() { if (!hist.r.length) return; const s = hist.r.pop(); hist.u.push(s); restore(s); sel = NOSEL(); changed(true, true); }
@@ -43,7 +43,7 @@ function slotsOf(i, sec = 0) { const w = Wk(i, sec); return w ? w.slots : []; }
 // ================= motor =================
 let building = false, pending = false, buildT = 0, builds = 0;
 function fixSetbacks() { const n = S.verts.length; S.setbacks = (S.setbacks || []).filter(sb => sb.from >= 1 && sb.from < S.floors); S.setbacks.forEach(sb => { sb.ins = (sb.ins || []).slice(0, n); while (sb.ins.length < n) sb.ins.push(0); }); }
-function recipe() { const props = { ...S.props }; return { verts: S.verts, edges: S.edges, setbacks: S.setbacks, floors: S.floors, floor_h: S.floor_h, roof: S.roof, props }; }
+function recipe() { const props = { ...S.props }; return { name: S.name, custom_styles: S.custom, verts: S.verts, edges: S.edges, setbacks: S.setbacks, floors: S.floors, floor_h: S.floor_h, roof: S.roof, props }; }
 function requestBuild() { clearTimeout(buildT); buildT = setTimeout(doBuild, 120); }
 async function doBuild() {
   if (!closed || S.verts.length < 3) return;
@@ -58,7 +58,7 @@ async function doBuild() {
   if (pending) { pending = false; doBuild(); }
 }
 function setOnline(v) { online = v; $("dot").className = "dot " + (v ? "ok" : ""); $("engtxt").textContent = v ? "Motor Blender conectado" : "Motor sin conexión"; }
-async function loadCatalog() { try { CAT = await (await fetch("/catalog")).json(); SCH = await (await fetch("/schema")).json(); setOnline(true); } catch { CAT = { window: [], door: [], balcony: [], roofs: [], mats: [] }; setOnline(false); } sidebar(); }
+async function loadCatalog() { try { CAT = await (await fetch("/catalog")).json(); SCH = await (await fetch("/schema")).json(); STSCH = await (await fetch("/style_schema")).json(); setOnline(true); } catch { CAT = { window: [], door: [], balcony: [], roofs: [], mats: [] }; setOnline(false); } sidebar(); }
 
 // ================= cambios =================
 function changed(rebuild = true, redraw = true) {
@@ -310,9 +310,11 @@ function closeCat() { catFor = null; $("cat").classList.remove("show"); $("main"
 function showCat() { if (["win", "door", "bal"].includes(tool)) openCat(tool, brush[tool], n => { brush[tool] = n; sidebar(); }, "Estilo de " + KINDS[tool].toLowerCase()); else closeCat(); }
 function fillCat() {
   if (!catFor || !CAT) return; const g = $("catGrid"); g.innerHTML = ""; const q = $("catQ").value.toLowerCase();
-  const list = CAT[CATKIND[catFor.kind]] || [];
+  const base0 = CAT[CATKIND[catFor.kind]] || [];
+  const mine = Object.entries(S.custom).filter(([, c]) => c.kind === CATKIND[catFor.kind]).map(([n, c]) => ({ name: n, thumb: (base0.find(x => x.name === c.base) || {}).thumb || "", mine: true }));
+  const list = [...mine, ...base0];
   g.append(el("div", { class: "card" + (!catFor.cur ? " on" : ""), onclick: () => pickCat(null), html: `<div style="display:flex;align-items:center;justify-content:center;flex:1">Estilo general</div>` }));
-  list.filter(x => x.name.toLowerCase().includes(q)).forEach(x => g.append(el("div", { class: "card" + (catFor.cur === x.name ? " on" : ""), title: x.name, onclick: () => pickCat(x.name), html: `<img loading="lazy" src="${x.thumb}"><div>${x.name}</div>` })));
+  list.filter(x => x.name.toLowerCase().includes(q)).forEach(x => g.append(el("div", { class: "card" + (catFor.cur === x.name ? " on" : ""), title: x.name, onclick: () => pickCat(x.name), html: `<img loading="lazy" src="${x.thumb}"><div>${x.mine ? "★ " : ""}${x.name}</div>` })));
 }
 function pickCat(n) { const f = catFor; if (!f) return; f.cur = n; f.onPick(n); fillCat(); if (tool === "select" || !["win", "door", "bal"].includes(tool)) closeCat(); }
 $("catQ").oninput = fillCat; $("catX").onclick = () => { if (["win", "door", "bal"].includes(tool)) setTool("select"); else closeCat(); };
@@ -332,7 +334,12 @@ function setbackSec() {
   return sec("Retranqueos", ...kids);
 }
 function stylePicker(kind, cur, onPick, labelGeneral = "Estilo general") {
-  const it = CAT && (CAT[CATKIND[kind]] || []).find(x => x.name === cur);
+  const wrap = el("div", {}, stylePickBtn(kind, cur, onPick, labelGeneral));
+  if (CATKIND[kind]) wrap.append(el("button", { class: "ghost", style: "font-size:12px;padding:2px 6px", title: "Cambiar forma, marco, divisiones, remates… de este estilo", onclick: () => openStyleEditor(kind, cur, onPick) }, "✎ Personalizar este estilo…"));
+  return wrap;
+}
+function stylePickBtn(kind, cur, onPick, labelGeneral = "Estilo general") {
+  const it = CAT && ([...Object.entries(S.custom).filter(([, c]) => c.kind === CATKIND[kind]).map(([n, c]) => ({ name: n, thumb: ((CAT[CATKIND[kind]] || []).find(x => x.name === c.base) || {}).thumb })), ...(CAT[CATKIND[kind]] || [])]).find(x => x.name === cur);
   return el("button", { class: "pick", onclick: () => openCat(kind, cur, n => { onPick(n); sidebar(); }, "Estilo de " + KINDS[kind].toLowerCase()), html: `${it ? `<img src="${it.thumb}">` : `<img style="opacity:.25">`}<span>${cur || labelGeneral}</span><span style="flex:0">▾</span>` });
 }
 function selTab(sd) {
@@ -374,12 +381,35 @@ function bldTab(sd) {
     el("div", { class: "hintline" }, "Doble clic sobre una pared en la planta agrega una esquina. Clic derecho sobre una esquina la borra.")));
 }
 function styTab(sd) {
+  if (CAT && CAT.looks && CAT.looks.length) sd.append(sec("Plantillas de aspecto", el("div", { class: "hintline" }, "Ajustan varias opciones de una vez (después cambiás lo que quieras)."), el("div", { class: "wlist", style: "margin-top:6px" }, ...CAT.looks.map(l => el("button", { onclick: () => { Object.entries(l.props).forEach(([k, v]) => { if (k === "r_preset") { S.roof = v; Object.keys(S.props).filter(x => x.startsWith("r_")).forEach(x => delete S.props[x]); } else S.props[k] = v; }); commit(true); toast("Plantilla aplicada: " + l.label, 2500); } }, el("span", {}, l.label))))));
   sd.append(sec("Estilos generales", el("div", { class: "hintline" }, "Valen para todas las paredes que no tengan uno propio."),
     el("div", { class: "row" }, el("label", {}, "Ventanas")), stylePicker("win", S.props.window_style, n => { S.props.window_style = n || "NONE"; if (!n) delete S.props.window_style; commit(true); }, "Predeterminado"),
     el("div", { class: "row" }, el("label", {}, "Puertas")), stylePicker("door", S.props.door_style, n => { S.props.door_style = n || "NONE"; if (!n) delete S.props.door_style; commit(true); }, "Predeterminado"),
     el("div", { class: "row" }, el("label", {}, "Balcones")), stylePicker("bal", S.props.balcony_style, n => { S.props.balcony_style = n || "NONE"; if (!n) delete S.props.balcony_style; commit(true); }, "Predeterminado")));
-  const colRow = (label, k) => { const i = el("input", { type: "color", value: toHex(colorOf(k)), style: "width:44px;height:26px;padding:0;border:1px solid var(--ln);border-radius:5px;background:none" }); i.onchange = () => { S.props[k] = fromHex(i.value); commit(true); }; return el("div", { class: "row" }, el("label", {}, label), i, el("button", { class: "ghost", title: "Volver al color original", onclick: () => { delete S.props[k]; commit(true); } }, "↺")); };
-  sd.append(sec("Colores", colRow("Fachada (A)", "facade_color"), colRow("Material B", "mat_b_color"), colRow("Material C", "mat_c_color"), colRow("Material D", "mat_d_color"), colRow("Molduras", "trim_color"), colRow("Techo", "roof_color"), colRow("Puertas", "door_color")));
+  const box = el("div", { class: "sec" }, el("h3", {}, "Colores y materiales")); sd.append(box);
+  box.append(el("div", { class: "hintline", style: "margin-bottom:6px" }, "Los colores se ven en el editor. Repetición, giro, brillo, metal y emisivo cuentan al exportar con texturas."));
+  compBlocks(box, "g", null, "mat");
+}
+// ---- editor de estilos (ventana, puerta, balcón): copia de un estilo con parámetros propios; la vista 3D se actualiza al cambiar cada valor
+async function openStyleEditor(kind, cur, onPick) {
+  if (!STSCH) return toast("El motor todavía no cargó las opciones de estilo");
+  const ck = CATKIND[kind], list = (CAT && CAT[ck]) || [];
+  const startName = cur || (list[0] && list[0].name); if (!startName) return;
+  const mineNow = S.custom[startName];
+  const baseName = mineNow ? mineNow.base : startName;
+  let params = mineNow ? { ...mineNow.params } : {};
+  let full; try { full = await (await fetch("/style?name=" + encodeURIComponent(baseName))).json(); } catch { return toast("No pude leer el estilo"); }
+  let name = mineNow ? startName : "Mi " + baseName.toLowerCase();
+  const panel = $("sted"); panel.innerHTML = ""; panel.classList.add("show");
+  const apply = () => { S.custom[name] = { base: baseName, kind: ck, params: { ...params } }; commit(true); };
+  const nameIn = el("input", { type: "text", value: name, style: "width:100%" });
+  nameIn.onchange = () => { const nn = (nameIn.value || "").trim() || name; if (nn !== name) { delete S.custom[name]; name = nn; if (S.custom[name] === undefined) { } apply(); onPick(name); sidebar(); } };
+  panel.append(el("header", {}, el("b", {}, "Personalizar " + KINDS[kind].toLowerCase()), el("button", { class: "ghost", onclick: () => panel.classList.remove("show") }, "✕")),
+    el("div", { class: "hintline", style: "padding:0 12px" }, `Parte de «${baseName}». Cada cambio se ve enseguida en el edificio y queda guardado en tu proyecto.`),
+    el("div", { style: "padding:6px 12px 0" }, el("label", { class: "hintline" }, "Nombre del estilo"), nameIn));
+  const body = el("div", { class: "stbody" }); panel.append(body);
+  (STSCH[ck] || []).forEach(g => { body.append(el("div", { class: "gtitle" }, g.title)); g.fields.forEach(f => { const cur = params[f.id] !== undefined ? params[f.id] : (full[f.id] !== undefined ? full[f.id] : f.default); body.append(el("div", { class: "row" }, el("label", { title: f.desc || f.label }, f.label), fctl(f, cur, v => { params[f.id] = v; apply(); onPick(name); }))); }); });
+  apply(); onPick(name); sidebar();
 }
 // ---- opciones del add-on (generadas desde sus propios cuadros de componentes)
 const openComp = new Set(["gwindow", "wwindow"]); let optQ = "";
@@ -402,11 +432,11 @@ function fieldRow(f, mode, ed) {
   if (changedFlag) row.append(el("button", { class: "ghost", title: "Volver al valor general", onclick: () => { if (isW) { delete ed.wp[f.w]; if (!Object.keys(ed.wp).length) delete ed.wp; } else delete S.props[f.g]; commit(true); } }, "↺"));
   return row;
 }
-function compBlocks(sd, mode, ed) {
+function compBlocks(sd, mode, ed, tabKey = "opt") {
   if (!SCH) return;
   const q = optQ.trim().toLowerCase(); const hidden = new Set((R && R.hidden) || []);
   for (const c of SCH.comps) {
-    if (mode === "w" && !c.wall) continue; if (mode === "g" && c.only_all === undefined) { }
+    if ((c.tab || "opt") !== tabKey) continue; if (mode === "w" && !c.wall) continue;
     const groups = c.groups.map(g => ({ title: g.title, fields: g.fields.filter(f => (mode === "w" ? f.w : f.g) && (mode === "w" || !hidden.has(f.g)) && (!q || (f.label + " " + g.title + " " + c.label).toLowerCase().includes(q))) })).filter(g => g.fields.length);
     if (!groups.length) continue;
     const key = mode + c.key; const det = el("details", { class: "comp" }, el("summary", { title: c.desc }, c.label));
@@ -422,6 +452,13 @@ function optTab(sd) {
   const box = el("div", { class: "sec" }); sd.append(box); compBlocks(box, "g");
   if (!SCH) box.append(el("div", { class: "hintline" }, "Esperando al motor…"));
 }
+function projTab(sd) {
+  const nm = el("input", { type: "text", value: S.name, style: "width:100%" }); nm.onchange = () => { S.name = (nm.value || "").trim() || "Edificio01"; commit(false); };
+  sd.append(sec("Nombre del edificio", nm, el("div", { class: "hintline", style: "margin-top:6px" }, "Es el nombre de los archivos que se exportan.")));
+  const box = el("div", { class: "sec" }, el("h3", {}, "Juego, texturas y exportación")); sd.append(box);
+  compBlocks(box, "g", null, "proj");
+  sd.append(el("div", { class: "sec" }, el("button", { class: "pri", style: "width:100%", onclick: () => $("bExport").click() }, "Exportar a Cities: Skylines II…")));
+}
 function sbTab(sd) {
   sd.append(setbackSec());
 }
@@ -429,10 +466,10 @@ function sidebar() {
   const sd = $("side"); const keep = sd.scrollTop; sd.innerHTML = "";
   if (!closed) { sd.append(el("div", { class: "empty", html: "<b>Todavía no hay edificio</b><br>Elegí una forma en el centro de la pantalla o dibujá tu planta." })); return; }
   const hasSel = sel.edge != null || sel.vert != null;
-  const tabs = [["sel", hasSel ? "Selección" : "Paredes"], ["bld", "Edificio"], ["sty", "Estilo"], ["opt", "Opciones"], ["sb", "Retranqueo"]];
+  const tabs = [["sel", hasSel ? "Selección" : "Paredes"], ["bld", "Edificio"], ["sty", "Estilo"], ["opt", "Opciones"], ["sb", "Retranqueo"], ["proj", "Proyecto"]];
   sd.append(el("div", { class: "tabs" }, ...tabs.map(([k, n]) => el("button", { class: tab === k ? "on" : "", onclick: () => { tab = k; sidebar(); guide(); } }, n))));
   const body = el("div"); sd.append(body);
-  ({ sel: selTab, bld: bldTab, sty: styTab, opt: optTab, sb: sbTab })[tab](body);
+  ({ sel: selTab, bld: bldTab, sty: styTab, opt: optTab, sb: sbTab, proj: projTab })[tab](body);
   sd.scrollTop = keep;
 }
 
@@ -470,9 +507,9 @@ $("bFit").onclick = fitView;
 document.querySelectorAll(".seg [data-v]").forEach(b => b.onclick = () => { viewMode = b.dataset.v; document.querySelectorAll(".seg [data-v]").forEach(x => x.classList.toggle("on", x === b)); $("main").className = (viewMode === "both" ? "" : "v-" + viewMode) + ($("cat").classList.contains("show") ? " catopen" : ""); setTimeout(() => { drawPlan(); }, 30); });
 $("bExport").onclick = () => {
   if (!closed) return toast("Primero dibujá la planta del edificio");
-  const m = $("mbox"); m.innerHTML = ""; const out = el("input", { type: "text", value: localStorage.getItem("cs2out") || "", placeholder: "Carpeta en tu PC, por ejemplo C:\\cs2\\mi_edificio", style: "width:100%" }); const name = el("input", { type: "text", value: localStorage.getItem("cs2name") || "Edificio01", style: "width:100%" });
+  const m = $("mbox"); m.innerHTML = ""; const out = el("input", { type: "text", value: localStorage.getItem("cs2out") || "", placeholder: "Carpeta en tu PC, por ejemplo C:\\cs2\\mi_edificio", style: "width:100%" }); const name = el("input", { type: "text", value: S.name || "Edificio01", style: "width:100%" });
   const msg = el("div", { class: "hintline", style: "margin-top:10px;min-height:2.6em" }); const go = el("button", { class: "pri" }, "Exportar");
-  go.onclick = async () => { go.disabled = true; msg.textContent = "Blender está armando los LODs, las UV y los archivos… (puede tardar un poco)"; localStorage.setItem("cs2out", out.value); localStorage.setItem("cs2name", name.value);
+  go.onclick = async () => { go.disabled = true; msg.textContent = "Blender está armando los LODs, las UV y los archivos… (puede tardar un poco)"; localStorage.setItem("cs2out", out.value); S.name = name.value; localStorage.setItem("cs2name", name.value);
     try { const r = await (await fetch("/export", { method: "POST", body: JSON.stringify({ ...recipe(), out: out.value, name: name.value }) })).json(); if (r.error) throw new Error(r.error); msg.innerHTML = `Listo. Triángulos: <b>${r.tris.join(" / ")}</b> (alto / medio / bajo)${r.warn && r.warn.length ? `<br><span style="color:var(--warn)">${r.warn.join("<br>")}</span>` : ""}<br>Archivos en: <b>${r.path}</b>`; } catch (e) { msg.innerHTML = `<span style="color:var(--bad)">No se pudo exportar: ${e.message}</span>`; } go.disabled = false; };
   m.append(el("h2", {}, "Exportar a Cities: Skylines II"), el("div", { class: "hintline" }, "Blender arma los tres niveles de detalle, las UV y los archivos del juego."), el("div", { class: "row" }, el("label", {}, "Nombre")), name, el("div", { class: "row" }, el("label", {}, "Carpeta de salida")), out, msg, el("div", { class: "row", style: "justify-content:flex-end;margin-top:12px" }, el("button", { onclick: () => $("modal").classList.remove("show") }, "Cerrar"), go));
   $("modal").classList.add("show");

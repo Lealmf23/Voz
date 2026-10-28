@@ -247,8 +247,71 @@ def schema():
             wmodes[prop] = attr
         comps.append(dict(key=c["key"], label=c["label"], desc=c.get("desc", ""), groups=groups, wall=any(f["w"] for g in groups for f in g["fields"]),
                           only_all=bool(c.get("only_all"))))
+    def extra(key, label, tab, names, desc=""):
+        fl = []
+        for n in names:
+            if n in gp:
+                d = _fdesc(gp[n])
+                d["g"], d["w"] = n, None
+                fl.append(d)
+        return dict(key=key, label=label, desc=desc, groups=[dict(title="", fields=fl)] if fl else [], wall=False, only_all=True, tab=tab)
+    mats = [("facade", "Pared A (fachada)"), ("facb", "Material B"), ("facc", "Material C"), ("facd", "Material D"), ("trim", "Molduras y marcos"),
+            ("roof", "Techo"), ("door", "Puertas"), ("gar", "Portones de garaje"), ("rail", "Barandas, rejas y metal")]
+    for m, lab in mats:
+        comps.append(extra("mat_" + m, lab, "mat", [f"ms_{m}_{k}" for k in ("tint", "tile", "rot", "metal", "gloss", "nstr", "aostr", "emis_col", "emis_str", "cmask", "snow")]))
+    comps.append(extra("colors", "Colores", "mat", ["facade_color", "mat_b_color", "mat_c_color", "mat_d_color", "trim_color", "roof_color", "door_color", "gar_color", "rail_color"]))
+    comps.append(extra("project", "Proyecto y juego", "proj", ["theme", "level", "asset_category", "zone_type", "win_rooms", "seed", "variation", "floors_jitter"]))
+    comps.append(extra("tex", "Texturas y UV", "proj", ["tex_size", "tex_mode", "uv_tile", "uv_smart", "uv_same_density", "uv_group", "bake_ao", "bake_ao_str", "bake_dist", "bake_samples", "bake_margin", "tex_share_lods"]))
+    comps.append(extra("misc", "Geometría general", "proj", ["curve_deg", "roof_height", "roof_box", "roof_geo_tiles", "clean_on_generate", "clean_on_export", "snap_floors"]))
+    for c in comps:
+        c.setdefault("tab", "opt")
     _SCHEMA.update(comps=comps, w2g=w2g, wmodes=wmodes)
     return _SCHEMA
+
+
+def style_schema():
+    """Parámetros de los estilos (ventana, puerta, balcón, muro cortina) con sus grupos, tipos, límites y valores por defecto."""
+    if not hasattr(bpy.types.Scene, "cs2_building"):
+        a.register()
+    sp = {p.identifier: p for p in a.CS2StyleProps.bl_rna.properties}
+    out = {}
+    for kind in ("window", "door", "balcony"):
+        groups = []
+        for title, keys, _cond in a._style_groups(kind):
+            fl = []
+            for k in keys:
+                p = sp.get(k[2:] if k.startswith("e_") else k)
+                if p is None:
+                    continue
+                d = _fdesc(p)
+                d["id"] = k[2:] if k.startswith("e_") else k
+                d["default"] = a.STYLE_DEFAULT.get(d["id"], d.get("default"))
+                fl.append(d)
+            if fl:
+                groups.append(dict(title=title, fields=fl))
+        out[kind] = groups
+    return out
+
+
+def register_custom(custom):
+    """Estilos propios del proyecto: copias de un estilo base con parámetros cambiados, vivos solo en esta sesión del motor."""
+    a.lib_ensure()
+    for name, d in (custom or {}).items():
+        base = a.get_style(d.get("base") or "")
+        if base is None or name in a._LIB["styles"] and name not in a._LIB["user"] and name not in _CUSTOM:
+            continue
+        st = dict(base)
+        st.update(d.get("params") or {})
+        st = {**a.STYLE_DEFAULT, **a.clean_style(st)}
+        st["kind"] = base["kind"]
+        a._LIB["styles"][name] = st
+        if name not in a._LIB["names"]:
+            a._LIB["names"].append(name)
+        a._LIB["ids"][a.style_id(name)] = name
+        _CUSTOM.add(name)
+
+
+_CUSTOM = set()
 
 
 def _wall_attr_maps():
@@ -342,6 +405,7 @@ def prepare(rec):
         edges = [dict(e) for e in reversed(edges)]
         edges = edges[1:] + edges[:1]
     floors, fh = int(rec.get("floors", 3)), float(rec.get("floor_h", 3.0))
+    register_custom(rec.get("custom_styles"))
     s.building_name = rec.get("name") or "Edificio01"
     s.floors, s.floor_height = floors, fh
     if rec.get("roof"):
@@ -484,6 +548,7 @@ def catalog():
         if k in cat:
             cat[k].append({"name": n, "thumb": "thumbs/" + slug(n) + ".png", "user": n in a._LIB["user"]})
     cat["roofs"] = [{"id": k, "label": v[0]} for k, v in a.ROOF_PRESETS.items()]
+    cat["looks"] = [{"id": k, "label": v[0], "props": {pk: (list(pv) if isinstance(pv, tuple) else pv) for pk, pv in v[1].items()}} for k, v in a.LOOK_PRESETS.items()]
     cat["mats"] = [{"id": i, "label": l} for i, l in ((0, "Igual al edificio"), (1, "A · fachada"), (2, "B · ladrillo"), (3, "C · gris oscuro"), (4, "D · madera"))]
     return cat
 
@@ -542,6 +607,12 @@ class H(http.server.BaseHTTPRequestHandler):
 
     def do_GET(self):
         p = self.path.split("?")[0]
+        if p == "/style_schema":
+            return self._send(200, json.dumps(run_in_main(lambda _r: style_schema(), None)))
+        if p == "/style":
+            from urllib.parse import parse_qs, urlparse
+            nm = parse_qs(urlparse(self.path).query).get("name", [""])[0]
+            return self._send(200, json.dumps(run_in_main(lambda _r: {k: v for k, v in (a.get_style(nm) or {}).items()}, None)))
         if p == "/schema":
             return self._send(200, json.dumps(run_in_main(lambda _r: schema(), None)))
         if p == "/catalog":
