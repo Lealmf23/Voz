@@ -56,7 +56,21 @@ const ok = (c, m) => { console.log((c ? 'OK   ' : 'FALLA') + ' ' + m); if (!c) f
   ok(await cnt() === n0, 'deshacer devuelve la ventana');
   await p.screenshot({ path: out + '/e2e_final.png' });
 
-  // 5) exportar
+  // 5) retranqueo: agregar uno desde el panel y editar una ventana del tramo superior
+  await ed(() => __ed.loadPreset('box')); await waitR();
+  await p.click('text=+ Agregar retranqueo'); await waitR();
+  ok(await ed(() => __ed.R.levels.length === 2 && __ed.R.walls.some(w => w.sec === 1)), 'el retranqueo crea un tramo superior con sus paredes');
+  await ed(() => __ed.setView(-1.2, .5, 60)); await p.waitForTimeout(300);
+  const up = await ed(() => { const w = __ed.R.walls.find(w => w.sec === 1 && w.edge === 0); const sl = w.slots.find(s => !s.deleted && s.kind === 'win'); const q = __ed.atS(0, (sl.a0 + sl.a1) / 2, __ed.wallPath(0, 1), 1); return { x: q.x - __ed.R.center[0], y: q.y - __ed.R.center[1], z: (sl.z0 + sl.z1) / 2, id: sl.id }; });
+  const [ux, uy] = await p.evaluate(i => window.__ed.project(i.x, i.y, i.z), up);
+  await p.mouse.click(ux, uy); await p.waitForTimeout(300);
+  ok(await ed(() => __ed.sel.sec) === 1 && await ed(() => __ed.sel.slot) === up.id, 'se elige una ventana del tramo superior');
+  const cu = () => ed(() => __ed.R.walls.find(w => w.sec === 1 && w.edge === 0).slots.filter(s => !s.deleted).length);
+  const u0 = await cu(); await p.keyboard.press('Delete'); await waitR();
+  ok(await cu() === u0 - 1, 'se puede borrar una ventana del tramo superior');
+  await p.screenshot({ path: out + '/e2e_setback.png' });
+
+  // 6) exportar (con el retranqueo)
   const dir = '/tmp/cs2_e2e_' + Date.now();
   const r = await p.evaluate(async d => { const rec = { ...JSON.parse(JSON.stringify({ verts: __ed.S.verts, edges: __ed.S.edges, floors: __ed.S.floors, floor_h: __ed.S.floor_h, roof: __ed.S.roof, props: __ed.S.props })), out: d, name: 'E2E' }; return await (await fetch('/export', { method: 'POST', body: JSON.stringify(rec) })).json(); }, dir);
   ok(!r.error && r.tris && r.tris[2] <= 500, 'exportación OK, triángulos ' + JSON.stringify(r.tris) + (r.error ? ' ' + r.error.slice(0, 200) : ''));

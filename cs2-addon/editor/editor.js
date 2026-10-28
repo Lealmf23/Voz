@@ -13,33 +13,37 @@ const fromHex = h => [1, 3, 5].map(i => s2l(parseInt(h.slice(i, i + 2), 16) / 25
 const colorOf = k => S.props[k] || DEFC[k];
 const matHex = m => toHex(colorOf(["facade_color", "facade_color", "mat_b_color", "mat_c_color", "mat_d_color"][m]));
 const newEdge = () => ({ bulge: 0, mat: 0, rot: 0, ws: "", ds: "", bs: "", ov: {}, add: [] });
-let S = { verts: [], edges: [], floors: 4, floor_h: 3, roof: "FLAT_SLAB", props: { balconies: "alternate" } };
+const NOSEL = () => ({ edge: null, sec: 0, slot: null, vert: null });
+const ES = (i, sec = 0) => sec ? ((E()[i].sx = E()[i].sx || {})[sec] = E()[i].sx[sec] || { ov: {}, add: [] }) : E()[i];
+const Wk = (i, sec = 0) => R && R.walls.find(w => w.edge === i && w.sec === sec);
+let S = { verts: [], edges: [], setbacks: [], floors: 4, floor_h: 3, roof: "FLAT_SLAB", props: { balconies: "alternate" } };
 let closed = false, R = null, CAT = null, online = false;
-let sel = { edge: null, slot: null, vert: null };
+let sel = NOSEL();
 let tool = "select", brush = { win: null, door: null, bal: null };
 let snapG = 1, showRoof = true, viewMode = "both";
 const hist = { u: [], r: [] };
 const snap = () => JSON.stringify({ S, closed });
-const restore = s => { const o = JSON.parse(s); S = o.S; closed = o.closed; };
+const restore = s => { const o = JSON.parse(s); S = o.S; S.setbacks = S.setbacks || []; closed = o.closed; };
 function commit(rebuild = true) { hist.u.push(snap()); if (hist.u.length > 100) hist.u.shift(); hist.r = []; changed(rebuild); }
-function undo() { if (hist.u.length < 2) return; hist.r.push(hist.u.pop()); restore(hist.u[hist.u.length - 1]); sel = { edge: null, slot: null, vert: null }; changed(true, true); }
-function redo() { if (!hist.r.length) return; const s = hist.r.pop(); hist.u.push(s); restore(s); sel = { edge: null, slot: null, vert: null }; changed(true, true); }
+function undo() { if (hist.u.length < 2) return; hist.r.push(hist.u.pop()); restore(hist.u[hist.u.length - 1]); sel = NOSEL(); changed(true, true); }
+function redo() { if (!hist.r.length) return; const s = hist.r.pop(); hist.u.push(s); restore(s); sel = NOSEL(); changed(true, true); }
 function toast(msg, ms = 3500) { const t = $("toast"); t.textContent = msg; t.style.display = "block"; clearTimeout(toast.h); toast.h = setTimeout(() => t.style.display = "none", ms); }
 const H = () => S.floors * S.floor_h;
 
 // ================= geometría de paredes =================
 function area(v) { let a = 0; for (let i = 0; i < v.length; i++) { const j = (i + 1) % v.length; a += v[i][0] * v[j][1] - v[j][0] * v[i][1]; } return a / 2; }
-function ensureCCW() { if (S.verts.length >= 3 && area(S.verts) < 0) { S.verts.reverse(); const e = S.edges.reverse(); S.edges = e.slice(1).concat(e.slice(0, 1)); S.edges.forEach(x => x.bulge = -x.bulge); } }
-function facetsOf(i) { const w = R && R.walls[i]; if (w && w.facets) return w.facets; const n = S.verts.length; return [[S.verts[i], S.verts[(i + 1) % n]]]; }
-function wallPath(i) { let c = 0; return facetsOf(i).map(f => { const dx = f[1][0] - f[0][0], dy = f[1][1] - f[0][1], L = Math.hypot(dx, dy) || 1e-9; const o = { p: f[0], dx: dx / L, dy: dy / L, L, c0: c }; c += L; return o; }); }
-function atS(i, s, path = wallPath(i)) { let f = path.find(q => s <= q.c0 + q.L + 1e-9) || path[path.length - 1]; const t = Math.max(0, Math.min(f.L, s - f.c0)); return { x: f.p[0] + f.dx * t, y: f.p[1] + f.dy * t, nx: f.dy, ny: -f.dx, f }; }
+function ensureCCW() { if (S.verts.length >= 3 && area(S.verts) < 0) { S.verts.reverse(); const e = S.edges.reverse(); S.edges = e.slice(1).concat(e.slice(0, 1)); S.edges.forEach(x => x.bulge = -x.bulge); (S.setbacks || []).forEach(sb => { const r = sb.ins.slice().reverse(); sb.ins = r.slice(1).concat(r.slice(0, 1)); }); } }
+function facetsOf(i, sec = 0) { const w = Wk(i, sec); if (w && w.facets) return w.facets; const n = S.verts.length; return [[S.verts[i], S.verts[(i + 1) % n]]]; }
+function wallPath(i, sec = 0) { let c = 0; return facetsOf(i, sec).map(f => { const dx = f[1][0] - f[0][0], dy = f[1][1] - f[0][1], L = Math.hypot(dx, dy) || 1e-9; const o = { p: f[0], dx: dx / L, dy: dy / L, L, c0: c }; c += L; return o; }); }
+function atS(i, s, path = wallPath(i), sec = 0) { let f = path.find(q => s <= q.c0 + q.L + 1e-9) || path[path.length - 1]; const t = Math.max(0, Math.min(f.L, s - f.c0)); return { x: f.p[0] + f.dx * t, y: f.p[1] + f.dy * t, nx: f.dy, ny: -f.dx, f }; }
 function wallLen(i) { return wallPath(i).reduce((a, f) => a + f.L, 0); }
 const E = () => S.edges;
-function slotsOf(i) { const w = R && R.walls[i]; return w ? w.slots : []; }
+function slotsOf(i, sec = 0) { const w = Wk(i, sec); return w ? w.slots : []; }
 
 // ================= motor =================
 let building = false, pending = false, buildT = 0, builds = 0;
-function recipe() { const props = { ...S.props }; return { verts: S.verts, edges: S.edges, floors: S.floors, floor_h: S.floor_h, roof: S.roof, props }; }
+function fixSetbacks() { const n = S.verts.length; S.setbacks = (S.setbacks || []).filter(sb => sb.from >= 1 && sb.from < S.floors); S.setbacks.forEach(sb => { sb.ins = (sb.ins || []).slice(0, n); while (sb.ins.length < n) sb.ins.push(0); }); }
+function recipe() { const props = { ...S.props }; return { verts: S.verts, edges: S.edges, setbacks: S.setbacks, floors: S.floors, floor_h: S.floor_h, roof: S.roof, props }; }
 function requestBuild() { clearTimeout(buildT); buildT = setTimeout(doBuild, 120); }
 async function doBuild() {
   if (!closed || S.verts.length < 3) return;
@@ -58,7 +62,8 @@ async function loadCatalog() { try { CAT = await (await fetch("/catalog")).json(
 
 // ================= cambios =================
 function changed(rebuild = true, redraw = true) {
-  if (!closed || S.verts.length < 3 || (R && R.walls.length !== S.verts.length)) R = null;
+  if (!closed || S.verts.length < 3 || (R && !R.walls.every(w => w.edge < S.verts.length) )) R = null;
+  fixSetbacks();
   if (rebuild) { if (closed) requestBuild(); else { R = null; showReal(); } }
   try { localStorage.setItem("cs2ed", snap()); } catch { }
   drawAll(); sidebar(); stats(); hintText();
@@ -89,7 +94,7 @@ function drawTools() {
   }
 }
 function setTool(t) {
-  tool = t; if (t === "draw" && closed) { toast("Planta nueva (Ctrl+Z para volver a la anterior)"); S.verts = []; S.edges = []; closed = false; R = null; sel = { edge: null, slot: null, vert: null }; showReal(); commit(false); }
+  tool = t; if (t === "draw" && closed) { toast("Planta nueva (Ctrl+Z para volver a la anterior)"); S.verts = []; S.edges = []; S.setbacks = []; closed = false; R = null; sel = NOSEL(); showReal(); commit(false); }
   ghost.visible = false; drawTools(); drawAll(); hintText(); sidebar(); showCat();
 }
 function hintText() {
@@ -126,6 +131,8 @@ function drawPlan() {
   if (!closed && hover && tool === "draw") { const [a, b] = w2s(...hover); pg.lineTo(a, b); }
   if (closed) { pg.closePath(); pg.fillStyle = "rgba(78,161,255,.14)"; pg.fill(); }
   pg.strokeStyle = "#7fb7ff"; pg.lineWidth = 2; pg.stroke();
+  // retranqueos: contorno de cada tramo superior
+  if (closed && R && R.levels) { pg.setLineDash([6, 4]); pg.strokeStyle = "#9fd0ff"; pg.lineWidth = 1.5; for (const lv of R.levels.slice(1)) { pg.beginPath(); lv.poly.forEach((q, k) => { const [a, b] = w2s(...q); k ? pg.lineTo(a, b) : pg.moveTo(a, b); }); pg.closePath(); pg.stroke(); } pg.setLineDash([]); }
   // aberturas sobre cada pared
   if (closed && R) for (let i = 0; i < V.length; i++) { const path = wallPath(i); for (const s of slotsOf(i)) { if (s.deleted || s.f !== 0) continue; const m = atS(i, (s.a0 + s.a1) / 2, path), a = atS(i, s.a0, path), b = atS(i, s.a1, path); const A = w2s(a.x, a.y), B = w2s(b.x, b.y); pg.strokeStyle = "#" + KCOL[s.kind].toString(16).padStart(6, "0"); pg.lineWidth = 5; pg.lineCap = "butt"; pg.beginPath(); pg.moveTo(...A); pg.lineTo(...B); pg.stroke(); } }
   // pared elegida
@@ -156,7 +163,7 @@ pc.addEventListener("pointerdown", e => {
     if (sel.edge != null) { const h = bulgeHandle(sel.edge), [a, b] = w2s(...h); if (Math.hypot(a - px, b - py) < 11) { dragB = { i: sel.edge, pre: snap() }; return; } }
     const v = nearVert(px, py); if (v != null) { sel = { edge: null, slot: null, vert: v }; dragV = { i: v, pre: snap(), moved: false }; drawAll(); sidebar(); return; }
     const ed = nearEdge(px, py); if (ed != null) { sel = { edge: ed, slot: null, vert: null }; if (e.detail === 2) insertVert(ed, s2w(px, py)); drawAll(); sidebar(); return; }
-    sel = { edge: null, slot: null, vert: null }; drawAll(); sidebar();
+    sel = NOSEL(); drawAll(); sidebar();
   }
 });
 pc.addEventListener("pointermove", e => {
@@ -174,9 +181,9 @@ pc.addEventListener("pointerup", () => {
 });
 pc.addEventListener("contextmenu", e => { e.preventDefault(); const [px, py] = planPos(e); const v = nearVert(px, py); if (closed && v != null && S.verts.length > 3) removeVert(v); });
 pc.addEventListener("wheel", e => { e.preventDefault(); const [px, py] = planPos(e); const before = s2w(px, py); view.s = Math.min(80, Math.max(3, view.s * (e.deltaY < 0 ? 1.12 : .89))); const after = s2w(px, py); view.cx += before[0] - after[0]; view.cy += before[1] - after[1]; drawPlan(); }, { passive: false });
-function closePoly() { if (S.verts.length < 3) return; closed = true; ensureCCW(); tool = "select"; sel = { edge: null, slot: null, vert: null }; fitView(); drawTools(); commit(true); }
-function insertVert(i, w) { R = null; const n = S.verts.length, p = S.verts[i], q = S.verts[(i + 1) % n]; const dx = q[0] - p[0], dy = q[1] - p[1], L2 = dx * dx + dy * dy; const t = Math.max(.1, Math.min(.9, ((w[0] - p[0]) * dx + (w[1] - p[1]) * dy) / L2)); const v = [sn(p[0] + dx * t), sn(p[1] + dy * t)]; S.verts.splice(i + 1, 0, v); const e = newEdge(); Object.assign(e, { mat: E()[i].mat, rot: E()[i].rot, ws: E()[i].ws, ds: E()[i].ds, bs: E()[i].bs }); E()[i] = { ...E()[i], ov: {}, add: [], bulge: 0 }; S.edges.splice(i + 1, 0, e); sel = { edge: null, slot: null, vert: i + 1 }; commit(true); }
-function removeVert(i) { R = null; S.verts.splice(i, 1); const e = S.edges; e.splice(i, 1); const pe = (i + e.length - 1) % e.length; e[pe] = { ...e[pe], ov: {}, add: [], bulge: 0 }; sel = { edge: null, slot: null, vert: null }; commit(true); }
+function closePoly() { if (S.verts.length < 3) return; closed = true; ensureCCW(); tool = "select"; sel = NOSEL(); fitView(); drawTools(); commit(true); }
+function insertVert(i, w) { R = null; const n = S.verts.length, p = S.verts[i], q = S.verts[(i + 1) % n]; const dx = q[0] - p[0], dy = q[1] - p[1], L2 = dx * dx + dy * dy; const t = Math.max(.1, Math.min(.9, ((w[0] - p[0]) * dx + (w[1] - p[1]) * dy) / L2)); const v = [sn(p[0] + dx * t), sn(p[1] + dy * t)]; S.verts.splice(i + 1, 0, v); S.setbacks.forEach(sb => sb.ins.splice(i + 1, 0, sb.ins[i])); const e = newEdge(); Object.assign(e, { mat: E()[i].mat, rot: E()[i].rot, ws: E()[i].ws, ds: E()[i].ds, bs: E()[i].bs }); E()[i] = { ...E()[i], ov: {}, add: [], bulge: 0 }; S.edges.splice(i + 1, 0, e); sel = { edge: null, slot: null, vert: i + 1 }; commit(true); }
+function removeVert(i) { R = null; S.verts.splice(i, 1); S.setbacks.forEach(sb => sb.ins.splice(i, 1)); const e = S.edges; e.splice(i, 1); const pe = (i + e.length - 1) % e.length; e[pe] = { ...e[pe], ov: {}, add: [], bulge: 0 }; sel = NOSEL(); commit(true); }
 function fitView() { if (!S.verts.length) return; const xs = S.verts.map(p => p[0]), ys = S.verts.map(p => p[1]); view.cx = (Math.min(...xs) + Math.max(...xs)) / 2; view.cy = (Math.min(...ys) + Math.max(...ys)) / 2; const sz = Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys), 10); view.s = Math.min(40, Math.min(pc.width, pc.height) / (sz * 1.8)); tgt.set(view.cx, view.cy, H() / 2); dist = Math.max(30, sz * 2.2 + H()); }
 
 // ================= vista 3D =================
@@ -214,18 +221,18 @@ function showReal() {
 // ---- superposiciones: paredes elegidas, aberturas y piezas de selección
 function quadMesh(P, color, op, order = 1) { const g = new T.BufferGeometry(); g.setAttribute("position", new T.Float32BufferAttribute(P.flat(), 3)); g.setIndex([0, 1, 2, 0, 2, 3]); const m = new T.Mesh(g, new T.MeshBasicMaterial({ color, transparent: true, opacity: op, side: T.DoubleSide, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -order, polygonOffsetUnits: -order })); return m; }
 function outline(P, color) { const g = new T.BufferGeometry().setFromPoints([...P, P[0]].map(p => new T.Vector3(...p))); return new T.Line(g, new T.LineBasicMaterial({ color })); }
-function slotQuad(i, s, off = .05, path = wallPath(i)) { const A = atS(i, s.a0, path), B = atS(i, s.a1, path); const pt = (q, z) => [q.x + q.nx * off, q.y + q.ny * off, z]; return [pt(A, s.z0), pt(B, s.z0), pt(B, s.z1), pt(A, s.z1)]; }
-function wallQuads(i) { const out = []; for (const f of wallPath(i)) { const n = [f.dy, -f.dx], o = .03; const a = [f.p[0] + n[0] * o, f.p[1] + n[1] * o], b = [f.p[0] + f.dx * f.L + n[0] * o, f.p[1] + f.dy * f.L + n[1] * o]; out.push([[a[0], a[1], 0], [b[0], b[1], 0], [b[0], b[1], H()], [a[0], a[1], H()]]); } return out; }
+function slotQuad(i, s, off = .05, path = wallPath(i), sec = 0) { const A = atS(i, s.a0, path), B = atS(i, s.a1, path); const pt = (q, z) => [q.x + q.nx * off, q.y + q.ny * off, z]; return [pt(A, s.z0), pt(B, s.z0), pt(B, s.z1), pt(A, s.z1)]; }
+function wallQuads(i, sec = 0) { const out = [], w = Wk(i, sec), z0 = w ? w.zmin : 0, z1 = w ? w.zmax : H(); for (const f of wallPath(i, sec)) { const n = [f.dy, -f.dx], o = .03; const a = [f.p[0] + n[0] * o, f.p[1] + n[1] * o], b = [f.p[0] + f.dx * f.L + n[0] * o, f.p[1] + f.dy * f.L + n[1] * o]; out.push([[a[0], a[1], z0], [b[0], b[1], z0], [b[0], b[1], z1], [a[0], a[1], z1]]); } return out; }
 function overlay() {
   clearGroup(grpOv); clearGroup(grpPick);
   if (!closed || !R) return;
-  for (let i = 0; i < S.verts.length; i++) {
-    const path = wallPath(i);
+  for (const w of R.walls) {
+    const i = w.edge, sec = w.sec, path = wallPath(i, sec);
     // piezas para elegir con el mouse
-    path.forEach((f, k) => { const q = wallQuads(i)[k]; const m = quadMesh(q, 0xffffff, 0); m.userData = { edge: i, f }; m.material.visible = true; grpPick.add(m); });
-    if (sel.edge === i) wallQuads(i).forEach(q => grpOv.add(quadMesh(q, 0xffd24e, .16)));
-    for (const s of slotsOf(i)) {
-      if (s.deleted) continue; const P = slotQuad(i, s, .06, path); const on = sel.edge === i && sel.slot === s.id;
+    const wq = wallQuads(i, sec); path.forEach((f, k) => { const m = quadMesh(wq[k], 0xffffff, 0); m.userData = { edge: i, sec, f }; m.material.visible = true; grpPick.add(m); });
+    if (sel.edge === i && sel.sec === sec) wq.forEach(q => grpOv.add(quadMesh(q, 0xffd24e, .16)));
+    for (const s of w.slots) {
+      if (s.deleted) continue; const P = slotQuad(i, s, .06, path, sec); const on = sel.edge === i && sel.sec === sec && sel.slot === s.id;
       grpOv.add(quadMesh(P, on ? 0xffd24e : KCOL[s.kind], on ? .45 : (tool === "select" ? .12 : .22), 2)); grpOv.add(outline(P, on ? 0xffd24e : KCOL[s.kind]));
     }
   }
@@ -240,25 +247,25 @@ const ray = new T.Raycaster(); const mouse = new T.Vector2(); let drag3 = null, 
 function pick3(e) {
   const r = rc.getBoundingClientRect(); mouse.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1); ray.setFromCamera(mouse, cam);
   const hit = ray.intersectObjects(grpPick.children, false)[0]; if (!hit) return null;
-  const { edge, f } = hit.object.userData; const p = hit.point; const t = (p.x - f.p[0]) * f.dx + (p.y - f.p[1]) * f.dy; return { edge, s: f.c0 + Math.max(0, Math.min(f.L, t)), z: p.z };
+  const { edge, sec, f } = hit.object.userData; const p = hit.point; const t = (p.x - f.p[0]) * f.dx + (p.y - f.p[1]) * f.dy; return { edge, sec, s: f.c0 + Math.max(0, Math.min(f.L, t)), z: p.z };
 }
-function slotAt(h) { if (!h) return null; return slotsOf(h.edge).find(s => !s.deleted && h.s >= s.a0 && h.s <= s.a1 && h.z >= s.z0 - .05 && h.z <= s.z1 + .05) || null; }
-function defaultsFor(i, kind) { const w = R.walls[i], d = w.defaults, fh = w.fh; if (kind === "door") return { w: d.dw, h: d.dh, sill: 0 }; if (kind === "bal") return { w: d.ww, h: 2.1, sill: 0 }; if (kind === "shop") return { w: 2.0, h: Math.max(1, fh - .95), sill: .3 }; return { w: d.ww, h: d.wh, sill: d.sill }; }
+function slotAt(h) { if (!h) return null; return slotsOf(h.edge, h.sec).find(s => !s.deleted && h.s >= s.a0 && h.s <= s.a1 && h.z >= s.z0 - .05 && h.z <= s.z1 + .05) || null; }
+function defaultsFor(i, kind, sec = 0) { const w = Wk(i, sec), d = w.defaults, fh = w.fh; if (kind === "door") return { w: d.dw, h: d.dh, sill: 0 }; if (kind === "bal") return { w: d.ww, h: 2.1, sill: 0 }; if (kind === "shop") return { w: 2.0, h: Math.max(1, fh - .95), sill: .3 }; return { w: d.ww, h: d.wh, sill: d.sill }; }
 function ghostFor(h) {
-  if (!h || !R) return null; const w = R.walls[h.edge]; if (!w) return null; const kind = tool; const df = defaultsFor(h.edge, kind);
-  const ex = slotAt(h); if (ex) return { replace: ex, edge: h.edge, P: slotQuad(h.edge, ex, .08), ok: true };
+  if (!h || !R) return null; const w = Wk(h.edge, h.sec); if (!w) return null; const kind = tool; const df = defaultsFor(h.edge, kind, h.sec);
+  const ex = slotAt(h); if (ex) return { replace: ex, edge: h.edge, sec: h.sec, P: slotQuad(h.edge, ex, .08, wallPath(h.edge, h.sec), h.sec), ok: true };
   const f = Math.max(0, Math.min(w.nfl - 1, Math.floor((h.z - w.zmin) / w.fh)));
   const c = Math.round(h.s / .25) * .25; const s = { a0: c - df.w / 2, a1: c + df.w / 2, z0: w.zmin + f * w.fh + df.sill, z1: w.zmin + f * w.fh + df.sill + df.h };
   const bad = s.a0 < w.amin + .12 || s.a1 > w.amax - .12 || s.z1 > w.zmax - .15 || w.slots.some(o => !o.deleted && Math.min(o.a1, s.a1) - Math.max(o.a0, s.a0) > .05 && Math.min(o.z1, s.z1) - Math.max(o.z0, s.z0) > .05);
-  return { add: { kind, f, a: c, ...(brush[kind] ? { style: brush[kind] } : {}) }, edge: h.edge, P: slotQuad(h.edge, s, .08), ok: !bad };
+  return { add: { kind, f, a: c, ...(brush[kind] ? { style: brush[kind] } : {}) }, edge: h.edge, sec: h.sec, P: slotQuad(h.edge, s, .08, wallPath(h.edge, h.sec), h.sec), ok: !bad };
 }
 rc.addEventListener("pointerdown", e => {
   rc.setPointerCapture(e.pointerId); drag3 = { x: e.clientX, y: e.clientY, b: e.button, moved: false, sx: e.clientX, sy: e.clientY };
-  if (e.button === 0 && tool === "select" && sel.slot) { const h = pick3(e), s = slotAt(h); if (s && s.id === sel.slot && h.edge === sel.edge) slotDrag = { edge: h.edge, id: s.id, s0: h.s, da: 0, slot: s }; }
+  if (e.button === 0 && tool === "select" && sel.slot) { const h = pick3(e), s = slotAt(h); if (s && s.id === sel.slot && h.edge === sel.edge && h.sec === sel.sec) slotDrag = { edge: h.edge, sec: h.sec, id: s.id, s0: h.s, da: 0, slot: s }; }
 });
 rc.addEventListener("pointermove", e => {
   if (drag3) { const dx = e.clientX - drag3.x, dy = e.clientY - drag3.y; if (Math.abs(e.clientX - drag3.sx) + Math.abs(e.clientY - drag3.sy) > 3) drag3.moved = true;
-    if (slotDrag) { const h = pick3(e); if (h && h.edge === slotDrag.edge) { slotDrag.da = Math.round((h.s - slotDrag.s0) / .25) * .25; const s = { ...slotDrag.slot, a0: slotDrag.slot.a0 + slotDrag.da, a1: slotDrag.slot.a1 + slotDrag.da }; setGhost(slotQuad(slotDrag.edge, s, .09), 0xffd24e, .35); } return; }
+    if (slotDrag) { const h = pick3(e); if (h && h.edge === slotDrag.edge && h.sec === slotDrag.sec) { slotDrag.da = Math.round((h.s - slotDrag.s0) / .25) * .25; const s = { ...slotDrag.slot, a0: slotDrag.slot.a0 + slotDrag.da, a1: slotDrag.slot.a1 + slotDrag.da }; setGhost(slotQuad(slotDrag.edge, s, .09, wallPath(slotDrag.edge, slotDrag.sec), slotDrag.sec), 0xffd24e, .35); } return; }
     if (drag3.moved && (drag3.b === 2 || e.shiftKey)) { const k = dist * .0018; tgt.x += (Math.sin(az) * dx - Math.cos(az) * Math.sin(el_) * dy * -1) * k; tgt.y += (-Math.cos(az) * dx - Math.sin(az) * Math.sin(el_) * dy * -1) * k; } else if (drag3.moved && (drag3.b === 0 || drag3.b === 1)) { az -= dx * .008; el_ = Math.min(1.5, Math.max(.03, el_ + dy * .008)); }
     drag3.x = e.clientX; drag3.y = e.clientY; return; }
   if (["win", "door", "bal", "shop"].includes(tool)) { const g = ghostFor(pick3(e)); if (g) setGhost(g.P, g.replace ? 0x4ea1ff : (g.ok ? 0x4cc38a : 0xef6a5e), g.replace ? .3 : .5); else ghost.visible = false; return; }
@@ -266,29 +273,29 @@ rc.addEventListener("pointermove", e => {
 });
 rc.addEventListener("pointerup", e => {
   const d = drag3; drag3 = null; ghost.visible = tool !== "select" ? ghost.visible : false;
-  if (slotDrag) { const sd = slotDrag; slotDrag = null; ghost.visible = false; if (sd.da) moveSlot(sd.edge, sd.id, sd.da); return; }
+  if (slotDrag) { const sd = slotDrag; slotDrag = null; ghost.visible = false; if (sd.da) moveSlot(sd.edge, sd.id, sd.da, sd.sec); return; }
   if (!d || d.moved || d.b !== 0) return;
   const h = pick3(e);
-  if (tool === "select") { if (!h) { sel = { edge: null, slot: null, vert: null }; } else { const s = slotAt(h); sel = { edge: h.edge, slot: s ? s.id : null, vert: null }; } drawAll(); sidebar(); return; }
+  if (tool === "select") { if (!h) { sel = NOSEL(); } else { const s = slotAt(h); sel = { edge: h.edge, sec: h.sec, slot: s ? s.id : null, vert: null }; } drawAll(); sidebar(); return; }
   if (["win", "door", "bal", "shop"].includes(tool)) { const g = ghostFor(h); if (!g || !g.ok) { if (g) toast("No entra ahí: se pisa con otra abertura o queda muy cerca del borde"); return; } placeFrom(g); }
 });
 rc.addEventListener("contextmenu", e => e.preventDefault());
 rc.addEventListener("wheel", e => { e.preventDefault(); dist = Math.min(600, Math.max(4, dist * (e.deltaY < 0 ? .9 : 1.1))); }, { passive: false });
-rc.addEventListener("dblclick", e => { const h = pick3(e); if (!h) return; const p = atS(h.edge, h.s); tgt.set(p.x, p.y, h.z); });
+rc.addEventListener("dblclick", e => { const h = pick3(e); if (!h) return; const p = atS(h.edge, h.s, wallPath(h.edge, h.sec)); tgt.set(p.x, p.y, h.z); });
 
 // ================= ediciones de aberturas =================
 function placeFrom(g) {
-  const ed = E()[g.edge];
-  if (g.add) { ed.add.push(g.add); sel = { edge: g.edge, slot: "add," + (ed.add.length - 1), vert: null }; }
-  else { const s = g.replace, kind = tool; const st = brush[kind] || undefined; if (s.id.startsWith("add,")) { const a = ed.add[+s.id.slice(4)]; if (a) { if (a.kind !== kind) { delete a.w; delete a.h; delete a.sill; } a.kind = kind; if (st) a.style = st; else delete a.style; } } else { const o = ed.ov[s.id] = ed.ov[s.id] || {}; delete o.del; if (o.kind && o.kind !== kind || s.kind !== kind) { delete o.w; delete o.h; delete o.sill; } o.kind = kind; if (st) o.style = st; else delete o.style; } sel = { edge: g.edge, slot: s.id, vert: null }; }
+  const ed = ES(g.edge, g.sec);
+  if (g.add) { ed.add.push(g.add); sel = { edge: g.edge, sec: g.sec, slot: "add," + (ed.add.length - 1), vert: null }; }
+  else { const s = g.replace, kind = tool; const st = brush[kind] || undefined; if (s.id.startsWith("add,")) { const a = ed.add[+s.id.slice(4)]; if (a) { if (a.kind !== kind) { delete a.w; delete a.h; delete a.sill; } a.kind = kind; if (st) a.style = st; else delete a.style; } } else { const o = ed.ov[s.id] = ed.ov[s.id] || {}; delete o.del; if (o.kind && o.kind !== kind || s.kind !== kind) { delete o.w; delete o.h; delete o.sill; } o.kind = kind; if (st) o.style = st; else delete o.style; } sel = { edge: g.edge, sec: g.sec, slot: s.id, vert: null }; }
   commit(true);
 }
-function moveSlot(i, id, da) { const ed = E()[i]; if (id.startsWith("add,")) { const a = ed.add[+id.slice(4)]; a.a = (a.a ?? 0) + da; } else { const o = ed.ov[id] = ed.ov[id] || {}; o.da = (o.da || 0) + da; } commit(true); }
-function setSlotField(i, id, k, v) { const ed = E()[i]; const tgt = id.startsWith("add,") ? ed.add[+id.slice(4)] : (ed.ov[id] = ed.ov[id] || {}); if (v === "" || v == null) delete tgt[k]; else tgt[k] = v; commit(true); }
-function deleteSlot(i, id) { const ed = E()[i]; if (id.startsWith("add,")) ed.add.splice(+id.slice(4), 1); else ed.ov[id] = { del: true }; sel.slot = null; commit(true); }
-function resetSlot(i, id) { const ed = E()[i]; if (!id.startsWith("add,")) delete ed.ov[id]; commit(true); }
-function clearWall(i) { const ed = E()[i]; ed.add = []; ed.ov = {}; slotsOf(i).forEach(s => { if (!s.id.startsWith("add,")) ed.ov[s.id] = { del: true }; }); sel.slot = null; commit(true); }
-function resetWall(i) { Object.assign(E()[i], { ov: {}, add: [], mat: 0, rot: 0, ws: "", ds: "", bs: "", bulge: 0 }); sel.slot = null; commit(true); }
+function moveSlot(i, id, da, sec = sel.sec || 0) { const ed = ES(i, sec); if (id.startsWith("add,")) { const a = ed.add[+id.slice(4)]; a.a = (a.a ?? 0) + da; } else { const o = ed.ov[id] = ed.ov[id] || {}; o.da = (o.da || 0) + da; } commit(true); }
+function setSlotField(i, id, k, v, sec = sel.sec || 0) { const ed = ES(i, sec); const tgt = id.startsWith("add,") ? ed.add[+id.slice(4)] : (ed.ov[id] = ed.ov[id] || {}); if (v === "" || v == null) delete tgt[k]; else tgt[k] = v; commit(true); }
+function deleteSlot(i, id, sec = sel.sec || 0) { const ed = ES(i, sec); if (id.startsWith("add,")) ed.add.splice(+id.slice(4), 1); else ed.ov[id] = { del: true }; sel.slot = null; commit(true); }
+function resetSlot(i, id, sec = sel.sec || 0) { const ed = ES(i, sec); if (!id.startsWith("add,")) delete ed.ov[id]; commit(true); }
+function clearWall(i, sec = sel.sec || 0) { const ed = ES(i, sec); ed.add = []; ed.ov = {}; slotsOf(i, sec).forEach(s => { if (!s.id.startsWith("add,")) ed.ov[s.id] = { del: true }; }); sel.slot = null; commit(true); }
+function resetWall(i, sec = sel.sec || 0) { if (sec) Object.assign(ES(i, sec), { ov: {}, add: [] }); else Object.assign(E()[i], { ov: {}, add: [], sx: {}, mat: 0, rot: 0, ws: "", ds: "", bs: "", bulge: 0 }); sel.slot = null; commit(true); }
 
 // ================= catálogo con miniaturas =================
 let catFor = null; // {kind, onPick, cur}
@@ -307,6 +314,17 @@ $("catQ").oninput = fillCat; $("catX").onclick = () => { if (["win", "door", "ba
 // ================= panel lateral =================
 const numRow = (label, val, step, min, max, fn, unit = "") => { const i = el("input", { type: "number", value: (+val).toFixed(2).replace(/\.?0+$/, ""), step, min, max }); i.onchange = () => { let v = parseFloat(i.value); if (isNaN(v)) return; v = Math.max(min, Math.min(max, v)); fn(v); }; return el("div", { class: "row" }, el("label", {}, label), i, unit ? el("span", { class: "hintline" }, unit) : ""); };
 const sec = (title, ...kids) => el("div", { class: "sec" }, el("h3", {}, title), ...kids);
+function setbackSec() {
+  const kids = [el("div", { class: "hintline" }, "Cada retranqueo achica la planta de un piso hacia arriba. Una pared con 0 m no se retira; el retiro no puede volver a achicarse más arriba.")];
+  S.setbacks.forEach((sb, k) => {
+    const from = el("input", { type: "number", value: sb.from + 1, min: 2, max: S.floors, step: 1 }); from.onchange = () => { sb.from = Math.max(1, Math.min(S.floors - 1, Math.round(+from.value) - 1)); S.setbacks.sort((a, b) => a.from - b.from); commit(true); };
+    kids.push(el("div", { class: "row", style: "margin-top:12px" }, el("label", {}, "Desde el piso"), from, el("button", { class: "ghost", title: "Quitar este retranqueo", onclick: () => { S.setbacks.splice(k, 1); commit(true); } }, "✕")));
+    kids.push(numRow("Todas las paredes", Math.max(...sb.ins), .5, 0, 20, v => { sb.ins = sb.ins.map(() => v); commit(true); }, "m"));
+    S.verts.forEach((_, i) => kids.push(numRow(`Pared ${i + 1}`, sb.ins[i] || 0, .5, 0, 20, v => { sb.ins[i] = v; commit(true); }, "m")));
+  });
+  kids.push(el("div", { class: "row" }, el("button", { disabled: S.floors < 2, onclick: () => { const last = S.setbacks.length ? S.setbacks[S.setbacks.length - 1] : null; const from = Math.min(S.floors - 1, last ? last.from + 1 : Math.max(1, Math.round(S.floors / 2))); S.setbacks.push({ from, ins: S.verts.map((_, i) => last ? last.ins[i] + 1.5 : 2) }); commit(true); } }, "+ Agregar retranqueo")));
+  return sec("Retranqueos", ...kids);
+}
 function stylePicker(kind, cur, onPick, labelGeneral = "Estilo general") {
   const it = CAT && (CAT[CATKIND[kind]] || []).find(x => x.name === cur);
   return el("button", { class: "pick", onclick: () => openCat(kind, cur, n => { onPick(n); sidebar(); }, "Estilo de " + KINDS[kind].toLowerCase()), html: `${it ? `<img src="${it.thumb}">` : `<img style="opacity:.25">`}<span>${cur || labelGeneral}</span><span style="flex:0">▾</span>` });
@@ -316,7 +334,7 @@ function sidebar() {
   if (!closed) { sd.append(el("div", { class: "empty", html: "<b>Empezá una planta</b><br>Elegí una forma en «Plantas rápidas» o tocá <b>Planta</b> (D) y dibujá las esquinas con clics." })); return; }
   // pared / abertura elegida
   if (sel.edge != null && E()[sel.edge]) {
-    const i = sel.edge, ed = E()[i], w = R && R.walls[i];
+    const i = sel.edge, wsec = sel.sec || 0, ed = E()[i], w = Wk(i, wsec);
     const s = sel.slot && w ? w.slots.find(x => x.id === sel.slot) : null;
     if (s) sd.append(sec("Abertura elegida",
       el("div", { class: "row" }, el("label", {}, "Tipo"), el("select", { onchange: ev => { const k = ev.target.value; if (s.id.startsWith("add,")) { const a = ed.add[+s.id.slice(4)]; a.kind = k; delete a.w; delete a.h; delete a.sill; } else { const o = ed.ov[s.id] = ed.ov[s.id] || {}; o.kind = k; delete o.w; delete o.h; delete o.sill; } commit(true); } }, ...Object.entries(KINDS).map(([k, n]) => el("option", { value: k, selected: k === s.kind }, n)))),
@@ -325,7 +343,7 @@ function sidebar() {
       s.kind === "win" || s.kind === "shop" ? numRow("Altura del antepecho", s.z0 - (w.zmin + s.f * w.fh), .05, 0, 4, v => setSlotField(i, s.id, "sill", v), "m") : "",
       el("div", { class: "row" }, el("button", { onclick: () => deleteSlot(i, s.id) }, "Borrar"), s.edited && !s.id.startsWith("add,") ? el("button", { onclick: () => resetSlot(i, s.id) }, "Restablecer") : "", el("button", { onclick: () => { sel.slot = null; drawAll(); sidebar(); } }, "Ver la pared")),
       el("div", { class: "hintline" }, "Arrastrala en la vista 3D para moverla.")));
-    sd.append(sec(`Pared ${i + 1}`,
+    sd.append(sec(`Pared ${i + 1}${wsec ? " · tramo superior" : ""}`,
       el("div", { class: "hintline" }, `${wallLen(i).toFixed(1)} m de largo · ${w ? w.slots.filter(x => !x.deleted).length : 0} aberturas`),
       el("div", { class: "row wrap" }, ...[1, 2, 3, 4].map(m => el("button", { class: "matbtn" + (ed.mat === m ? " on" : ""), title: R && R.mats ? "" : "", onclick: () => { ed.mat = ed.mat === m ? 0 : m; commit(true); }, html: `<span class="sw" style="background:${matHex(m)}"></span>${"ABCD"[m - 1]}` })), el("button", { onclick: () => { ed.mat = 0; commit(true); } }, "Igual al resto")),
       el("div", { class: "row" }, el("label", {}, "Girar textura"), el("div", { class: "seg" }, ...[0, 1, 2, 3].map(r => el("button", { class: ed.rot === r ? "on" : "", onclick: () => { ed.rot = r; commit(true); } }, r * 90 + "°")))),
@@ -344,6 +362,7 @@ function sidebar() {
     el("div", { class: "row" }, el("label", {}, "Techo"), el("select", { style: "max-width:170px", onchange: ev => { S.roof = ev.target.value; commit(true); } }, ...(CAT ? CAT.roofs : []).map(r => el("option", { value: r.id, selected: r.id === S.roof }, r.label)))),
     el("div", { class: "row" }, el("label", {}, "Balcones"), el("select", { onchange: ev => { S.props.balconies = ev.target.value; commit(true); } }, ...[["none", "Sin balcones"], ["alternate", "Alternados"], ["all", "En todas"], ["random", "Al azar"]].map(([k, n]) => el("option", { value: k, selected: S.props.balconies === k }, n)))),
     el("div", { class: "row" }, el("label", {}, "Cornisas entre pisos"), el("input", { type: "checkbox", checked: !!S.props.string_courses, onchange: ev => { S.props.string_courses = ev.target.checked; commit(true); } }))));
+  sd.append(setbackSec());
   sd.append(sec("Estilos generales", el("div", { class: "hintline" }, "Valen para todas las paredes que no tengan uno propio."),
     el("div", { class: "row" }, el("label", {}, "Ventanas")), stylePicker("win", S.props.window_style, n => { S.props.window_style = n || "NONE"; if (!n) delete S.props.window_style; commit(true); }, "Predeterminado"),
     el("div", { class: "row" }, el("label", {}, "Puertas")), stylePicker("door", S.props.door_style, n => { S.props.door_style = n || "NONE"; if (!n) delete S.props.door_style; commit(true); }, "Predeterminado"),
@@ -362,13 +381,13 @@ function loadPreset(k) {
   if (k === "round") { v = []; const n = 24; for (let i = 0; i < n; i++) v.push([Math.round(Math.cos(i / n * 2 * Math.PI) * 8 * 4) / 4, Math.round(Math.sin(i / n * 2 * Math.PI) * 8 * 4) / 4]); S.verts = v; S.edges = v.map(newEdge); }
   else if (k === "curve") { S.verts = [[0, 0], [24, 0], [24, 12], [0, 12]]; S.edges = S.verts.map(newEdge); S.edges[1].bulge = 4; }
   else { const b = PRE[k]; const cx = b.reduce((a, p) => a + p[0], 0) / b.length, cy = b.reduce((a, p) => a + p[1], 0) / b.length; S.verts = b.map(p => [Math.round(p[0] - cx), Math.round(p[1] - cy)]); S.edges = S.verts.map(newEdge); }
-  closed = true; sel = { edge: null, slot: null, vert: null }; tool = "select"; R = null; ensureCCW(); fitView(); drawTools(); commit(true);
+  S.setbacks = []; closed = true; sel = NOSEL(); tool = "select"; R = null; ensureCCW(); fitView(); drawTools(); commit(true);
 }
 $("preset").onchange = e => { if (e.target.value) loadPreset(e.target.value); e.target.value = ""; };
 $("bUndo").onclick = undo; $("bRedo").onclick = redo;
 $("bSave").onclick = () => { const a = el("a", { href: URL.createObjectURL(new Blob([snap()], { type: "application/json" })), download: "edificio.cs2ed.json" }); a.click(); toast("Guardado en tus descargas"); };
 $("bOpen").onclick = () => $("file").click();
-$("file").onchange = async e => { const f = e.target.files[0]; if (!f) return; try { restore(await f.text()); sel = { edge: null, slot: null, vert: null }; R = null; hist.u.push(snap()); fitView(); changed(true); toast("Archivo abierto"); } catch { toast("No pude leer ese archivo"); } e.target.value = ""; };
+$("file").onchange = async e => { const f = e.target.files[0]; if (!f) return; try { restore(await f.text()); sel = NOSEL(); R = null; hist.u.push(snap()); fitView(); changed(true); toast("Archivo abierto"); } catch { toast("No pude leer ese archivo"); } e.target.value = ""; };
 $("bRoof").onclick = e => { showRoof = !showRoof; e.target.classList.toggle("on", showRoof); if (roofMat) roofMat.visible = showRoof; };
 $("bFit").onclick = fitView;
 document.querySelectorAll(".seg [data-v]").forEach(b => b.onclick = () => { viewMode = b.dataset.v; document.querySelectorAll(".seg [data-v]").forEach(x => x.classList.toggle("on", x === b)); $("main").className = (viewMode === "both" ? "" : "v-" + viewMode) + ($("cat").classList.contains("show") ? " catopen" : ""); setTimeout(() => { drawPlan(); }, 30); });
@@ -389,7 +408,7 @@ addEventListener("keydown", e => {
   const k = e.key.toLowerCase();
   if ((e.ctrlKey || e.metaKey) && k === "z") { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
   if ((e.ctrlKey || e.metaKey) && k === "y") { e.preventDefault(); redo(); return; }
-  if (k === "escape") { if (!closed && S.verts.length) { S.verts = []; S.edges = []; drawAll(); hintText(); } else if (tool !== "select") setTool("select"); else { sel = { edge: null, slot: null, vert: null }; drawAll(); sidebar(); } return; }
+  if (k === "escape") { if (!closed && S.verts.length) { S.verts = []; S.edges = []; drawAll(); hintText(); } else if (tool !== "select") setTool("select"); else { sel = NOSEL(); drawAll(); sidebar(); } return; }
   if (k === "enter" && tool === "draw" && !closed) { closePoly(); return; }
   if (k === "delete" || k === "backspace") { if (sel.edge != null && sel.slot) deleteSlot(sel.edge, sel.slot); else if (sel.vert != null && S.verts.length > 3) removeVert(sel.vert); return; }
   const m = { v: "select", d: "draw", w: "win", p: "door", b: "bal", t: "shop" }[k]; if (m && !e.ctrlKey && !e.metaKey) setTool(m);

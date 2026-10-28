@@ -83,6 +83,104 @@ def _clean():
         bpy.data.collections.remove(c)
 
 
+def offset_poly(pts, owner, ins):
+    """Planta antihoraria desplazada hacia adentro: cada faceta `i` se corre `ins[owner[i]]` metros y las vecinas se unen en la esquina."""
+    n = len(pts)
+    lines = []
+    for i in range(n):
+        p, q = pts[i], pts[(i + 1) % n]
+        L = math.hypot(q[0] - p[0], q[1] - p[1]) or 1e-9
+        d = float(ins[owner[i]] or 0.0)
+        dx, dy = (q[0] - p[0]) / L, (q[1] - p[1]) / L
+        lines.append(((p[0] - dy * d, p[1] + dx * d), (dx, dy)))
+    out = []
+    for i in range(n):
+        (p0, d0), (p1, d1) = lines[i - 1], lines[i]
+        cr = d0[0] * d1[1] - d0[1] * d1[0]
+        if abs(cr) < 1e-6:
+            out.append(p1)
+            continue
+        t = ((p1[0] - p0[0]) * d1[1] - (p1[1] - p0[1]) * d1[0]) / cr
+        out.append((p0[0] + d0[0] * t, p0[1] + d0[1] * t))
+    for i in range(n):          # la planta no puede darse vuelta ni cruzarse
+        a0, a1, b0, b1 = pts[i], pts[(i + 1) % n], out[i], out[(i + 1) % n]
+        if (a1[0] - a0[0]) * (b1[0] - b0[0]) + (a1[1] - a0[1]) * (b1[1] - b0[1]) <= 0:
+            raise RuntimeError("El retranqueo es demasiado grande para esa pared")
+    if area(out) <= 0.5:
+        raise RuntimeError("El retranqueo deja el piso sin superficie")
+    return out
+
+
+def make_levels(pts, owner, facets_of, nedges, floors, fh, setbacks):
+    """Tramos de altura con su planta: [{z0, z1, P, facets}]. Los retranqueos solo pueden crecer hacia arriba (por pared)."""
+    sbs = sorted([sb for sb in (setbacks or []) if 1 <= int(sb.get("from", 0)) < floors], key=lambda sb: int(sb["from"]))
+    zs = [0.0] + [int(sb["from"]) * fh for sb in sbs] + [floors * fh]
+    cum = [0.0] * nedges
+    levels = [dict(z0=zs[0], z1=zs[1], P=list(pts), ins=list(cum))]
+    for k, sb in enumerate(sbs):
+        ins = list(sb.get("ins") or [])
+        ins += [0.0] * (nedges - len(ins))
+        cum = [max(cum[i], float(ins[i] or 0.0)) for i in range(nedges)]
+        levels.append(dict(z0=zs[k + 1], z1=zs[k + 2], P=offset_poly(pts, owner, cum), ins=list(cum)))
+    for lv in levels:
+        n = len(lv["P"])
+        fs = [[] for _ in range(nedges)]
+        for i in range(n):
+            fs[owner[i]].append((lv["P"][i], lv["P"][(i + 1) % n]))
+        lv["facets"] = fs
+    return levels
+
+
+def stepped_shape(ctx, levels, floors, fh):
+    """Malla cerrada con una planta por tramo (paredes, terrazas entre tramos y tapas)."""
+    bm = bmesh.new()
+    cache = {}
+
+    def V(p, z):
+        k = (round(p[0], 4), round(p[1], 4), round(z, 4))
+        if k not in cache:
+            cache[k] = bm.verts.new((p[0], p[1], z))
+        return cache[k]
+
+    def face(vs):
+        u = []
+        for v in vs:
+            if not u or u[-1] is not v:
+                u.append(v)
+        if len(u) > 1 and u[0] is u[-1]:
+            u.pop()
+        if len(set(u)) < 3:
+            return
+        try:
+            bm.faces.new(u)
+        except ValueError:
+            pass
+    P0 = levels[0]["P"]
+    face([V(p, 0.0) for p in reversed(P0)])
+    for k, lv in enumerate(levels):
+        P, n = lv["P"], len(lv["P"])
+        for i in range(n):
+            a_, b_ = P[i], P[(i + 1) % n]
+            face([V(a_, lv["z0"]), V(b_, lv["z0"]), V(b_, lv["z1"]), V(a_, lv["z1"])])
+        if k + 1 < len(levels):
+            Q = levels[k + 1]["P"]
+            for i in range(n):
+                j = (i + 1) % n
+                face([V(P[i], lv["z1"]), V(P[j], lv["z1"]), V(Q[j], lv["z1"]), V(Q[i], lv["z1"])])
+    face([V(p, floors * fh) for p in levels[-1]["P"]])
+    bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
+    me = bpy.data.meshes.new("CS2_Forma")
+    bm.to_mesh(me)
+    bm.free()
+    obj = bpy.data.objects.new("CS2_Forma", me)
+    ctx.scene.collection.objects.link(obj)
+    return obj
+
+
+def level_of(levels, z):
+    return next((k for k, lv in enumerate(levels) if z <= lv["z1"] + 1e-3), len(levels) - 1)
+
+
 def prepare(rec):
     """Arma la forma con los ajustes por pared y las ediciones de ranuras. Devuelve (s, obj, info) sin generar el edificio."""
     if not hasattr(bpy.types.Scene, "cs2_building"):
@@ -107,7 +205,11 @@ def prepare(rec):
     if rec.get("roof"):
         s.r_preset = rec["roof"]
     pts, owner, facets = expand(verts, edges)
-    obj = a.create_shape_object(ctx, "BOX", 1, 1, floors * fh, 0.0, pts=pts)
+    levels = make_levels(pts, owner, facets, len(verts), floors, fh, rec.get("setbacks"))
+    if len(levels) == 1:
+        obj = a.create_shape_object(ctx, "BOX", 1, 1, floors * fh, 0.0, pts=pts)
+    else:
+        obj = stepped_shape(ctx, levels, floors, fh)
     # ajustes por pared (atributos de cara)
     bm = bmesh.new()
     bm.from_mesh(obj.data)
@@ -116,7 +218,8 @@ def prepare(rec):
         if abs(f.normal.z) > 0.12:
             continue
         c = f.calc_center_median()
-        i = min(range(len(pts)), key=lambda j: _dist_seg((c.x, c.y), (pts[j], pts[(j + 1) % len(pts)])))
+        P = levels[level_of(levels, c.z)]["P"]
+        i = min(range(len(P)), key=lambda j: _dist_seg((c.x, c.y), (P[j], P[(j + 1) % len(P)])))
         e = edges[owner[i]]
         if e.get("mat"):
             f[lays["cs2_f_mat"]] = int(e["mat"])
@@ -129,18 +232,21 @@ def prepare(rec):
     bm.free()
     s.shape_object = obj
     s.mode = "shape"
-    return s, obj, dict(verts=verts, edges=edges, pts=pts, owner=owner, facets=facets, floors=floors, fh=fh)
+    return s, obj, dict(verts=verts, edges=edges, pts=pts, owner=owner, facets=facets, floors=floors, fh=fh, levels=levels)
 
 
 def wall_index(shape, info):
-    """Para cada borde de la planta, el índice de una pared de `shape` que le corresponde."""
+    """Para cada (borde de la planta, tramo de altura), el índice de una pared de `shape` que le corresponde."""
     c = shape["center"]
     found = {}
-    pts = info["pts"]
+    lv = info["levels"]
     for idx, (wp, n, cfg) in enumerate(shape["walls"]):
         m = sum((q for q in wp), Vector((0, 0, 0))) / len(wp) + c
-        i = min(range(len(pts)), key=lambda j: _dist_seg((m.x, m.y), (pts[j], pts[(j + 1) % len(pts)])))
-        found.setdefault(info["owner"][i], idx)
+        zmin = min(q.z for q in wp) + c.z
+        k = min(range(len(lv)), key=lambda t: abs(lv[t]["z0"] - zmin))
+        P = lv[k]["P"]
+        i = min(range(len(P)), key=lambda j: _dist_seg((m.x, m.y), (P[j], P[(j + 1) % len(P)])))
+        found.setdefault((info["owner"][i], k), idx)
     return found
 
 
@@ -152,10 +258,13 @@ def build(rec):
     widx = wall_index(shape, info)
     data = {"walls": []}
     layouts = {}
-    for ei, idx in widx.items():
-        lay = a.slot_layout(p, shape, idx)
-        layouts[ei] = lay
+    def edits_of(ei, sec):
         e = info["edges"][ei]
+        return e if sec == 0 else ((e.get("sx") or {}).get(str(sec)) or {})
+    for (ei, sec), idx in widx.items():
+        lay = a.slot_layout(p, shape, idx)
+        layouts[(ei, sec)] = lay
+        e = edits_of(ei, sec)
         if e.get("ov") or e.get("add"):
             data["walls"].append({"key": list(lay["key"]), "ov": dict(e.get("ov") or {}), "add": list(e.get("add") or [])})
     a.slot_edits_save(obj, data)
@@ -175,11 +284,7 @@ def build(rec):
     out["cols"] = {sl.material.name.split("_", 1)[-1]: [round(c, 3) for c in sl.material.diffuse_color[:3]] for sl in main.material_slots if sl.material}
     edata = a.slot_edits_load(obj)
     walls = []
-    for ei in range(len(info["verts"])):
-        lay = layouts.get(ei)
-        if lay is None:
-            walls.append(None)
-            continue
+    for (ei, sec), lay in sorted(layouts.items(), key=lambda kv: (kv[0][1], kv[0][0])):
         ent = a.slot_edits_match(edata, lay["key"])
         d = lay["defaults"]
         slots = []
@@ -198,9 +303,9 @@ def build(rec):
             zb = lay["zmin"] + ef["f"] * d["fh"]
             slots.append(dict(id=f"add,{i}", kind=ef["kind"], f=ef["f"], a0=ef["a0"], a1=ef["a1"], z0=zb + ef["sill"], z1=zb + ef["sill"] + ef["h"],
                               style=ef["style"], edited=True, deleted=False))
-        ch = (shape["walls"][widx[ei]][2] or {}).get("_chain")
+        ch = (shape["walls"][widx[(ei, sec)]][2] or {}).get("_chain")
         if ch:   # en una curva, puertas y balcones solo existen en las facetas que miran al frente (o si se piden en todas)
-            cfg = shape["walls"][widx[ei]][2]
+            cfg = shape["walls"][widx[(ei, sec)]][2]
             for sl_ in slots:
                 if sl_["kind"] in ("door", "bal") and not sl_["id"].startswith("add,"):
                     c_, acc = (sl_["a0"] + sl_["a1"]) / 2, 0.0
@@ -212,9 +317,10 @@ def build(rec):
                             break
                     if not a._chain_keep_bal(p, cfg, fac["n"]):
                         sl_["deleted"] = True
-        walls.append(dict(key=lay["key"], amin=lay["amin"], amax=lay["amax"], zmin=lay["zmin"], zmax=lay["zmax"], fh=d["fh"], nfl=lay["nfl"],
-                          defaults=d, slots=slots, facets=[[list(q0), list(q1)] for q0, q1 in info["facets"][ei]]))
+        walls.append(dict(edge=ei, sec=sec, key=lay["key"], amin=lay["amin"], amax=lay["amax"], zmin=lay["zmin"], zmax=lay["zmax"], fh=d["fh"], nfl=lay["nfl"],
+                          defaults=d, slots=slots, facets=[[list(q0), list(q1)] for q0, q1 in info["levels"][sec]["facets"][ei]]))
     out["walls"] = walls
+    out["levels"] = [dict(z0=lv["z0"], z1=lv["z1"], poly=[list(q) for q in lv["P"]]) for lv in info["levels"]]
     return out
 
 

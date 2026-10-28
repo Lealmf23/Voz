@@ -91,7 +91,7 @@ para Cities: Skylines 2 (y CS1) con LODs, UV, texturas y exportación FBX. Blend
 - Editor estilo Sims (planta, paredes curvas, aberturas con fantasma, catálogo con miniaturas, exportar) con Blender como motor: ver
   `editor/README.md`. `engine.py` arma la forma sin cortar por pisos (así las curvas se unen en cadenas), escribe atributos de cara por pared y
   `cs2_slots`, y devuelve malla + reparto de aberturas (`slot_layout`/`slot_effective`) por pared. Probar con `editor/tests/e2e.js`.
-- `create_shape_object(..., pts=)` acepta una planta propia (lo usa el motor).
+- `create_shape_object(..., pts=)` acepta una planta propia (lo usa el motor). Retranqueos: `make_levels`/`stepped_shape` arman una malla cerrada por tramos (`setbacks:[{from,ins}]`); las ediciones del tramo k de una pared van en `edge.sx[k]`.
 
 ## Herramientas de revisión (headless)
 - `tools/hojas_componentes.py <carpeta> <window|door|balcony>`: hojas de contacto con todos los estilos incluidos.
