@@ -85,7 +85,12 @@ const ok = (c, m) => { console.log((c ? 'OK   ' : 'FALLA') + ' ' + m); if (!c) f
   await p.click('#side .tabs >> text=Proyecto');
   ok(await p.locator('#side details').count() > 0, 'la pestaña Proyecto muestra opciones de juego y texturas');
 
-  // 8) exportar (con el retranqueo)
+  // 8) tipos de fachada: aplicar uno cambia pisos, techo y estilos
+  await p.click('#side .tabs >> text=Estilo');
+  await p.click('.fc >> text=Torre de vidrio'); await waitR();
+  ok(await ed(() => __ed.S.floors === 14 && __ed.S.props.cw_on_g === true), 'un tipo de fachada pone pisos, muro cortina y demás opciones');
+
+  // 9) exportar (con el retranqueo)
   const dir = '/tmp/cs2_e2e_' + Date.now();
   const r = await p.evaluate(async d => { const rec = { ...JSON.parse(JSON.stringify({ verts: __ed.S.verts, edges: __ed.S.edges, props: __ed.S.props, custom_styles: __ed.S.custom, floors: __ed.S.floors, floor_h: __ed.S.floor_h, roof: __ed.S.roof, props: __ed.S.props })), out: d, name: 'E2E' }; return await (await fetch('/export', { method: 'POST', body: JSON.stringify(rec) })).json(); }, dir);
   ok(!r.error && r.tris && r.tris[2] <= 500, 'exportación OK, triángulos ' + JSON.stringify(r.tris) + (r.error ? ' ' + r.error.slice(0, 200) : ''));

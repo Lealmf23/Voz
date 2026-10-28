@@ -549,6 +549,9 @@ def catalog():
             cat[k].append({"name": n, "thumb": "thumbs/" + slug(n) + ".png", "user": n in a._LIB["user"]})
     cat["roofs"] = [{"id": k, "label": v[0]} for k, v in a.ROOF_PRESETS.items()]
     cat["looks"] = [{"id": k, "label": v[0], "props": {pk: (list(pv) if isinstance(pv, tuple) else pv) for pk, pv in v[1].items()}} for k, v in a.LOOK_PRESETS.items()]
+    cat["facades"] = [{"id": k, "label": v[0], "desc": v[1], "props": {pk: (list(pv) if isinstance(pv, tuple) else pv) for pk, pv in v[2].items()},
+                       "floors": v[3]["floors"], "floor_h": v[3]["floor_height"], "thumb": "thumbs/facade_" + k + ".png"} for k, v in a.FACADE_TYPES.items()]
+    cat["facade_base"] = {k: (list(v) if isinstance(v, tuple) else v) for k, v in a.FACADE_BASE.items()}
     cat["mats"] = [{"id": i, "label": l} for i, l in ((0, "Igual al edificio"), (1, "A · fachada"), (2, "B · ladrillo"), (3, "C · gris oscuro"), (4, "D · madera"))]
     return cat
 

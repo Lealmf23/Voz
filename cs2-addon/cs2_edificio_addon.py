@@ -13087,6 +13087,55 @@ LOOK_PRESETS = {
 }
 
 
+# Tipos de fachada: arquetipos listos (torre de vidrio, bloque de oficinas, ladrillo comercial, departamentos, casa en hilera, depósito...).
+# Cada tipo pone varios valores generales de una vez; antes de aplicarlo se vuelve a FACADE_BASE para que no se acumulen restos del anterior.
+FACADE_BASE = dict(
+    window_style="NONE", door_style="NONE", balcony_style="NONE", balconies="none", balcony_walls="front", string_courses=False,
+    win_w=1.3, win_h=1.4, win_sill=0.9, wall_mat_g="1", ground_mat_g="0", frm_mat_g="1", pan_mode_g="1", pan_mat_g="1",
+    gr_on_g="0", sh_on_g="0", sh_aw_g="0", slt_mode_g="0", cas_w_g=0.0, cw_on_g=False, r_preset="FLAT",
+    facade_color=(0.69, 0.58, 0.41), trim_color=(0.81, 0.77, 0.68), roof_color=(0.15, 0.115, 0.097))
+FACADE_TYPES = {
+    "GLASS_TOWER": ("Torre de vidrio", "Muro cortina en todas las paredes, techo plano", dict(
+        cw_on_g=True, roof_color=(0.05, 0.05, 0.06), r_preset="FLAT"), dict(floors=14, floor_height=3.6)),
+    "OFFICE": ("Bloque de oficinas", "Ventanas anchas, losas marcadas y techo plano", dict(
+        facade_color=(0.62, 0.64, 0.66), win_w=2.4, win_h=1.7, win_sill=0.9, gr_on_g="3", window_style="Ventana tira horizontal",
+        r_preset="FLAT_SLAB"), dict(floors=8, floor_height=3.4)),
+    "BRICK_COMMERCIAL": ("Comercial de ladrillo", "Ladrillo, cornisas, vidriera abajo y ventanas con cuarterones", dict(
+        wall_mat_g="2", frm_mat_g="1", window_style="Ventana 2x2 cuarterones", string_courses=True, sh_on_g="1", r_preset="FLAT"),
+        dict(floors=4, floor_height=3.4)),
+    "APARTMENT_SLAB": ("Departamentos (bloque)", "Balcones de vidrio alternados y crujías de color", dict(
+        facade_color=(0.78, 0.75, 0.70), balconies="alternate", balcony_style="Balcón vidrio y pasamanos", window_style="Ventana 2 hojas",
+        pan_mode_g="6", pan_mat_g="2", r_preset="FLAT"), dict(floors=6, floor_height=3.0)),
+    "APARTMENT_TOWER": ("Torre de departamentos", "Balcones corridos continuos y retícula estructural", dict(
+        facade_color=(0.80, 0.80, 0.78), balconies="all", balcony_style="Corrido continuo vidrio", gr_on_g="1", window_style="Ventana lisa",
+        r_preset="FLAT_SLAB"), dict(floors=12, floor_height=3.0)),
+    "TOWNHOUSE": ("Casa en hilera", "Tejado a dos aguas, ventanas con cuarterones y balcón francés", dict(
+        facade_color=(0.74, 0.62, 0.50), window_style="Ventana 2x2 cuarterones", door_style="Puerta 4 cuarterones", string_courses=True,
+        balconies="alternate", balcony_style="Balcón francés", r_preset="GABLE_TILE"), dict(floors=3, floor_height=3.0)),
+    "COTTAGE": ("Casa chica", "Dos pisos, persianas abiertas y chimenea", dict(
+        facade_color=(0.85, 0.82, 0.74), window_style="Ventana persianas abiertas", door_style="Puerta 2 cuarterones", r_preset="GABLE_CHIM"),
+        dict(floors=2, floor_height=2.9)),
+    "SHOPFRONT": ("Local con vivienda", "Vidriera con pilares y toldos abajo, ventanas arriba", dict(
+        wall_mat_g="2", sh_on_g="1", sh_aw_g="1", string_courses=True, window_style="Ventana con moldura", r_preset="FLAT"),
+        dict(floors=3, floor_height=3.2)),
+    "WAREHOUSE": ("Depósito", "Gris, pocas ventanas altas, portón y techo de chapa", dict(
+        facade_color=(0.55, 0.55, 0.52), wall_mat_g="3", win_w=1.6, win_h=0.7, win_sill=4.2, window_style="Ventana tira horizontal",
+        door_style="Portón de tiras", r_preset="SHED_MODERN"), dict(floors=1, floor_height=6.5)),
+    "FACTORY_HALL": ("Nave industrial", "Una sola planta alta, ventanas en tira y techo a dos aguas de chapa", dict(
+        facade_color=(0.50, 0.52, 0.50), wall_mat_g="3", win_w=2.6, win_h=0.9, win_sill=5.2, window_style="Ventana tira horizontal",
+        door_style="Portón de tiras", r_preset="GABLE_METAL"), dict(floors=1, floor_height=8.0)),
+    "INDUSTRIAL_TOWER": ("Torre industrial", "Gris oscuro, ventanas angostas y altas, techo plano", dict(
+        facade_color=(0.40, 0.40, 0.42), wall_mat_g="3", window_style="Ventana angosta alta", win_w=0.9, win_h=2.0, win_sill=0.9, r_preset="FLAT"),
+        dict(floors=6, floor_height=4.0)),
+    "MIXED_USE": ("Uso mixto", "Comercio abajo, departamentos con balcón arriba", dict(
+        facade_color=(0.76, 0.70, 0.62), sh_on_g="1", balconies="alternate", balcony_style="Balcón balaustres", window_style="Ventana con moldura",
+        string_courses=True, r_preset="PEAKED_MODERN"), dict(floors=5, floor_height=3.1)),
+    "CLASSIC": ("Clásico con mansarda", "Cornisa con vuelo, balcones de herrería y techo mansarda", dict(
+        facade_color=(0.82, 0.78, 0.68), window_style="Ventana con moldura", balconies="alternate", balcony_style="Balcón francés balaustres",
+        string_courses=True, string_style="CORNICE", r_preset="MANSARD"), dict(floors=6, floor_height=3.3)),
+}
+
+
 class CS2_OT_look(bpy.types.Operator):
     bl_idname = "cs2.look"
     bl_label = "Aplicar estilo"
@@ -13116,6 +13165,45 @@ class CS2_OT_look(bpy.types.Operator):
             log_error(getattr(self, "bl_idname", "operador"), e)
             self.report({"ERROR"}, str(e))
             return {"CANCELLED"}
+        return {"FINISHED"}
+
+
+class CS2_OT_facade_type(bpy.types.Operator):
+    bl_idname = "cs2.facade_type"
+    bl_label = "Tipo de fachada"
+    bl_description = "Aplica un tipo de fachada completo (estilos, materiales, balcones, techo, colores); después podés cambiar cada valor"
+    bl_options = {"REGISTER", "UNDO"}
+    kind: bpy.props.StringProperty()
+
+    def execute(self, context):
+        s = context.scene.cs2_building
+        data = FACADE_TYPES.get(self.kind)
+        if not data:
+            return {"CANCELLED"}
+        live = s.live_update
+        s.live_update = False
+        try:
+            vals = dict(FACADE_BASE)
+            vals.update(data[2])
+            for k, v in vals.items():
+                if k == "r_preset":
+                    s.r_preset = v
+                    _roof_preset_apply(s, context)
+                else:
+                    try:
+                        setattr(s, k, v)
+                    except (TypeError, ValueError):
+                        _log_exc("facade_type_" + k)
+        finally:
+            s.live_update = live
+        try:
+            regenerate(context, live=True)
+        except Exception as e:
+            log_error(getattr(self, "bl_idname", "operador"), e)
+            self.report({"ERROR"}, str(e))
+            return {"CANCELLED"}
+        fl = data[3]
+        self.report({"INFO"}, f"{data[0]}: pensado para {fl['floors']} pisos de {fl['floor_height']} m (la altura sale de tu forma)")
         return {"FINISHED"}
 
 
@@ -13458,6 +13546,11 @@ class CS2_PT_rev(bpy.types.Panel):
             row = lay.row(align=True)
             for k, v in LOOK_PRESETS.items():
                 row.operator("cs2.look", text=v[0].replace("Casa moderna: ", ""), icon="HOME").look = k
+            fbox = lay.box()
+            fbox.label(text="Tipos de fachada", icon="OUTLINER_OB_MESH")
+            grid = fbox.grid_flow(columns=2, align=True)
+            for k, v in FACADE_TYPES.items():
+                grid.operator("cs2.facade_type", text=v[0]).kind = k
             box = lay.box()
             box.label(text="Materiales", icon="MATERIAL")
             box.prop(s, "wall_mat_g")
@@ -16811,7 +16904,7 @@ class CS2_PT_ranuras(bpy.types.Panel):
 
 
 classes = (CS2BuildingProps, CS2WallProps, CS2_OT_generate, CS2_OT_cancel_generate, CS2_OT_check_holes, CS2_OT_random_seed, CS2_OT_sample_pieces,
-           CS2_OT_export, CS2_OT_regen_lods, CS2_OT_from_mesh, CS2_OT_cs1_generate, CS2_OT_export_cs1, CS2_OT_clean_mesh, CS2_OT_grid, CS2_OT_batch, CS2_OT_create_shape, CS2_OT_delete_all, CS2_OT_reset,
+           CS2_OT_export, CS2_OT_regen_lods, CS2_OT_from_mesh, CS2_OT_cs1_generate, CS2_OT_export_cs1, CS2_OT_clean_mesh, CS2_OT_grid, CS2_OT_batch, CS2_OT_create_shape, CS2_OT_facade_type, CS2_OT_delete_all, CS2_OT_reset,
            CS2_OT_edit_shape, CS2_OT_floor, CS2_OT_split_floors, CS2_OT_select_band,
            CS2_OT_wall_reset, CS2_OT_style_step, CS2_OT_style_folder, CS2_OT_style_reload,
            CS2_OT_thumbs_all, CS2_OT_refresh, CS2_OT_look, CS2_OT_porch, CS2_OT_roof_apply, CS2_OT_roof_clear, CS2_OT_pbr_pick, CS2_OT_pbr_folder, CS2_OT_pbr_clear, CS2_OT_atlas_view, CS2_OT_make_textures,

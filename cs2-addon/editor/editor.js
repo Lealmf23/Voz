@@ -380,7 +380,13 @@ function bldTab(sd) {
   sd.append(sec("Planta", el("div", { class: "row" }, el("label", {}, "Imán de la grilla"), el("select", { onchange: ev => { snapG = +ev.target.value; } }, ...[[.25, "25 cm"], [.5, "50 cm"], [1, "1 m"], [2, "2 m"], [8, "8 m (celda)"]].map(([v, n]) => el("option", { value: v, selected: v === snapG }, n)))),
     el("div", { class: "hintline" }, "Doble clic sobre una pared en la planta agrega una esquina. Clic derecho sobre una esquina la borra.")));
 }
+function applyFacade(f) {
+  const base = CAT.facade_base; Object.keys(base).forEach(k => delete S.props[k]); Object.keys(S.props).filter(k => k.startsWith("r_")).forEach(k => delete S.props[k]);
+  const props = { ...base, ...f.props }; const roof = props.r_preset; delete props.r_preset; Object.assign(S.props, props); S.roof = roof; S.floors = f.floors; S.floor_h = f.floor_h; fixSetbacks(); commit(true);
+}
 function styTab(sd) {
+  if (CAT && CAT.facades && CAT.facades.length) sd.append(sec("Tipos de fachada", el("div", { class: "hintline" }, "Un clic arma estilos, materiales, balcones, techo y colores de ese tipo de edificio (también pone la cantidad de pisos sugerida). Después ajustás lo que quieras."),
+    el("div", { class: "fgrid" }, ...CAT.facades.map(f => el("div", { class: "fc", title: f.desc + " · " + f.floors + " pisos", onclick: () => { applyFacade(f); toast(f.label + " aplicado · " + f.floors + " pisos", 2500); }, html: `<img loading="lazy" src="${f.thumb}" onerror="this.style.visibility='hidden'"><div>${f.label}</div>` })))));
   if (CAT && CAT.looks && CAT.looks.length) sd.append(sec("Plantillas de aspecto", el("div", { class: "hintline" }, "Ajustan varias opciones de una vez (después cambiás lo que quieras)."), el("div", { class: "wlist", style: "margin-top:6px" }, ...CAT.looks.map(l => el("button", { onclick: () => { Object.entries(l.props).forEach(([k, v]) => { if (k === "r_preset") { S.roof = v; Object.keys(S.props).filter(x => x.startsWith("r_")).forEach(x => delete S.props[x]); } else S.props[k] = v; }); commit(true); toast("Plantilla aplicada: " + l.label, 2500); } }, el("span", {}, l.label))))));
   sd.append(sec("Estilos generales", el("div", { class: "hintline" }, "Valen para todas las paredes que no tengan uno propio."),
     el("div", { class: "row" }, el("label", {}, "Ventanas")), stylePicker("win", S.props.window_style, n => { S.props.window_style = n || "NONE"; if (!n) delete S.props.window_style; commit(true); }, "Predeterminado"),
@@ -535,7 +541,7 @@ function loop() {
   setCam(); Rn.render(sc, cam); requestAnimationFrame(loop);
 }
 addEventListener("resize", drawPlan);
-window.__ed = { get builds() { return builds; }, w2s, s2w, get view() { return view; }, project: (x, y, z) => { const v = new T.Vector3(x, y, z).project(cam), r = rc.getBoundingClientRect(); return [r.left + (v.x + 1) / 2 * r.width, r.top + (1 - v.y) / 2 * r.height]; }, atS, wallPath, get S() { return S; }, get R() { return R; }, get closed() { return closed; }, get sel() { return sel; }, get tool() { return tool; }, loadPreset, setTool, doBuild, cam, tgt, get ghostVisible() { return ghost.visible; }, setView: (a, e, d) => { az = a; el_ = e; dist = d; }, setSel: s => { sel = s; drawAll(); sidebar(); }, pick3, slotAt, ghostFor };
+window.__ed = { applyFacade, get CAT() { return CAT; }, get builds() { return builds; }, w2s, s2w, get view() { return view; }, project: (x, y, z) => { const v = new T.Vector3(x, y, z).project(cam), r = rc.getBoundingClientRect(); return [r.left + (v.x + 1) / 2 * r.width, r.top + (1 - v.y) / 2 * r.height]; }, atS, wallPath, get S() { return S; }, get R() { return R; }, get closed() { return closed; }, get sel() { return sel; }, get tool() { return tool; }, loadPreset, setTool, doBuild, cam, tgt, get ghostVisible() { return ghost.visible; }, setView: (a, e, d) => { az = a; el_ = e; dist = d; }, setSel: s => { sel = s; drawAll(); sidebar(); }, pick3, slotAt, ghostFor };
 (async () => {
   try { const s = localStorage.getItem("cs2ed"); if (s) { restore(s); } } catch { }
   hist.u.push(snap()); drawTools(); await loadCatalog(); hintText(); stats(); sidebar(); welcome(); guide();
