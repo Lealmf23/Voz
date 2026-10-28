@@ -1597,6 +1597,7 @@ def _read_style_file(path):
         with open(path, "r", encoding="utf-8") as fh:
             data = json.load(fh)
     except Exception:
+        _log_exc("leer_estilo")
         return []
     out = []
     if isinstance(data, dict) and "styles" in data and isinstance(data["styles"], list):
@@ -5937,6 +5938,7 @@ def uv_pins_load(raw):
         d = json.loads(raw)
         return d if isinstance(d, list) else []
     except Exception:
+        _log_exc("zonas_fijadas")
         return []
 
 
@@ -9270,6 +9272,7 @@ def mat_icon(path):
             pc.load(path, path, "IMAGE")
         return pc[path].icon_id
     except Exception:
+        _log_exc("icono_material")
         return 0
 
 
@@ -9599,7 +9602,7 @@ def _depsgraph_handler(scene, depsgraph):
             _LAST_ACTIVE["key"] = key
             load_wall_ui(ctx)
     except Exception:
-        pass
+        _log_exc("cambio_cara_activa")
 
 
 class CS2_OT_edit_shape(bpy.types.Operator):
@@ -10457,6 +10460,7 @@ def thumb_icon(name, allow_queue=True):
             _THUMBS["icons"][name] = pc[key].icon_id
             return pc[key].icon_id
         except Exception:
+            _log_exc("icono_miniatura")
             return 0
     if allow_queue:
         queue_thumb(name)
@@ -11793,6 +11797,7 @@ def _shape_size(s):
         sz = load_shape_for(s)["size"]
         return sz.x, sz.y, sz.z
     except Exception:
+        _log_exc("tamano_forma")
         return None
 
 
@@ -11853,6 +11858,7 @@ def lot_overhang(ob):
                    float(co[:, 1].max() - cz * CELL / 2), float(-co[:, 1].min() - cz * CELL / 2), 0.0)
         return over
     except Exception:
+        _log_exc("exceso_lote")
         return None
 
 
@@ -14887,6 +14893,7 @@ def _roof_selected_cfg(context):
             if cfg:
                 return cfg
     except Exception:
+        _log_exc("ajustes_techo_cara")
         return None
     return None
 
@@ -14949,7 +14956,7 @@ def _comp_invoke_state(op, context, spec):
             try:
                 setattr(op, "usar_" + use, True)
             except Exception:
-                pass
+                _log_exc("usar_grupo_pared")
 
 
 def _comp_apply(op, context, spec):
@@ -15184,7 +15191,7 @@ def _comp_draw(op, context, spec):
                         if not f["vis"](op):
                             continue
                     except Exception:
-                        pass
+                        _log_exc("visibilidad_campo")
                 names.append(p)
         if not names:
             continue

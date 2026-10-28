@@ -1146,6 +1146,113 @@ def case_comp_draw():
     result(componentes=len(a._COMP["specs"]))
 
 
+def _wall_uv_extent(me, nsign, region_mat, min_area=6.0):
+    """(suma de anchos UV, suma de altos UV, cantidad) de las caras grandes de un material que miran a `nsign` en Y."""
+    uvd = me.uv_layers[0].data
+    du = dv = 0.0
+    n = 0
+    for poly in me.polygons:
+        if poly.material_index != region_mat or poly.area < min_area or poly.normal.y * nsign < 0.9:
+            continue
+        us = [uvd[li].uv[0] for li in poly.loop_indices]
+        vs = [uvd[li].uv[1] for li in poly.loop_indices]
+        du += max(us) - min(us)
+        dv += max(vs) - min(vs)
+        n += 1
+    return du, dv, n
+
+
+def _uv_in_unit(me):
+    uvd = me.uv_layers[0].data
+    return all(-1e-6 <= c.uv[0] <= 1 + 1e-6 and -1e-6 <= c.uv[1] <= 1 + 1e-6 for c in uvd)
+
+
+def case_tex_rotate():
+    """Giro de texturas: por material (cualquier ángulo) y por pared (cuartos de vuelta). Las UV del atlas giran en los tres LODs,
+    quedan dentro de 0-1, la geometría no cambia y sin giro todo queda igual."""
+    import bmesh
+    brick = make_brick(os.path.join(tempfile.gettempdir(), "cs2_test_brick.png"))
+    s = setup("BOX", "FLAT", 16, 12, 3, styles=False, ms_facade_mode="PBR", ms_facade_img_color=brick, ms_facade_tile=2.0)
+    MF = a.MAT["facade"]
+
+    def regen():
+        bpy.ops.cs2.generate()
+        bpy.ops.cs2.regen_lods()
+        return lod_objs(s)
+
+    base = regen()
+    tris0 = [a.mesh_tris(o) for o in base]
+    du0, dv0, n0 = _wall_uv_extent(base[0].data, -1, MF)
+    check(n0 > 0, "no encontré paredes grandes de fachada")
+    check(du0 > dv0, f"sin giro la pared ancha debe ser más ancha que alta en el mapa ({du0:.3f} x {dv0:.3f})")
+
+    # 1) material girado 90°: en los tres LODs el ancho y el alto del mapa se intercambian
+    s.ms_facade_rot = 90.0
+    objs = regen()
+    for i, o in enumerate(objs):
+        du, dv, n = _wall_uv_extent(o.data, -1, MF)
+        check(n > 0 and dv > du, f"LOD{i}: con 90° la pared debe quedar más alta que ancha en el mapa ({du:.3f} x {dv:.3f})")
+        check(_uv_in_unit(o.data), f"LOD{i}: UV fuera de 0-1 con 90°")
+    check([a.mesh_tris(o) for o in objs] == tris0, "girar la textura no debe cambiar la geometría")
+
+    # 2) 180° vuelve a la proporción original; un ángulo libre sigue dentro del mapa
+    s.ms_facade_rot = 180.0
+    objs = regen()
+    du, dv, _n = _wall_uv_extent(objs[0].data, -1, MF)
+    check(du > dv, "con 180° la pared debe volver a ser más ancha que alta")
+    s.ms_facade_rot = 37.0
+    objs = regen()
+    for i, o in enumerate(objs):
+        check(_uv_in_unit(o.data), f"LOD{i}: UV fuera de 0-1 con 37°")
+    # 3) el botón gira de a 90° y el 0 vuelve al original
+    bpy.ops.cs2.slot_rot(slot="facade", delta=90.0)
+    check(abs(s.ms_facade_rot - (-53.0)) < 1e-6 or abs(s.ms_facade_rot - 127.0) < 1e-6, f"giro del botón inesperado: {s.ms_facade_rot}")
+    bpy.ops.cs2.slot_rot(slot="facade", delta=0.0)
+    check(s.ms_facade_rot == 0.0, "el botón de quitar el giro no lo dejó en 0")
+    objs = regen()
+    du, dv, _n = _wall_uv_extent(objs[0].data, -1, MF)
+    check(abs(du - du0) < 1e-4 and abs(dv - dv0) < 1e-4, "sin giro las UV deben ser las originales")
+
+    # 4) giro por pared: solo la pared del frente (normal -Y) gira, la de atrás no
+    obj = s.shape_object
+    bm = bmesh.new()
+    bm.from_mesh(obj.data)
+    bm.transform(obj.matrix_world)
+    lays = a.wall_layers(bm, create=True)
+    bm.transform(obj.matrix_world.inverted())
+    front = [f for f in bm.faces if f.normal.y < -0.9]
+    check(front, "la forma no tiene pared frontal")
+    for f in front:
+        f[lays["cs2_f_rot"]] = 1
+    bm.to_mesh(obj.data)
+    bm.free()
+    objs = regen()
+    dfu, dfv, nf = _wall_uv_extent(objs[0].data, -1, MF)
+    dbu, dbv, nb = _wall_uv_extent(objs[0].data, 1, MF)
+    check(nf > 0 and dfv > dfu, f"la pared girada debe quedar más alta que ancha ({dfu:.3f} x {dfv:.3f})")
+    check(nb > 0 and dbu > dbv, f"la pared de atrás no debe girar ({dbu:.3f} x {dbv:.3f})")
+    check(_uv_in_unit(objs[0].data), "UV fuera de 0-1 con una pared girada")
+    result(ok=True, du0=round(du0, 3), dv0=round(dv0, 3))
+
+
+def case_tex_rotate_bake():
+    """Con el giro puesto, las UV únicas del horneado se arman igual (sin errores ni islas superpuestas)."""
+    brick = make_brick(os.path.join(tempfile.gettempdir(), "cs2_test_brick.png"))
+    for rot in (90.0, 37.0):
+        s = setup("L", "FLAT", 24, 16, 4, bake_ao=True, ms_facade_mode="PBR", ms_facade_img_color=brick, ms_facade_tile=2.0)
+        s.ms_facade_rot = rot
+        bpy.ops.cs2.generate()
+        bpy.ops.cs2.regen_lods()
+        objs = lod_objs(s)
+        a.uv_generate(bpy.context, a.props_to_params(s), objs, None)
+        for i, o in enumerate(objs):
+            pct = _overlap_pct(o.data)
+            check(pct < 0.5, f"giro {rot}° LOD{i}: {pct:.2f} % del mapa con islas superpuestas")
+        for o in objs:
+            bpy.data.objects.remove(o, do_unlink=True)
+    result(ok=True)
+
+
 CASES = {k[5:]: v for k, v in globals().items() if k.startswith("case_")}
 
 if __name__ == "__main__":
@@ -1154,6 +1261,16 @@ if __name__ == "__main__":
         print(" ".join(CASES))
         sys.exit(0)
     t0 = time.time()
-    CASES[name]()
-    print(f"OK {name} {time.time() - t0:.1f}s")
+    code = 0
+    try:
+        CASES[name]()
+        print(f"OK {name} {time.time() - t0:.1f}s")
+    except BaseException:
+        import traceback
+        traceback.print_exc()
+        code = 1
+    # sale sin esperar la limpieza de Blender (en algunos equipos se cuelga al cerrar y el corredor esperaba al tope)
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(code)
 
