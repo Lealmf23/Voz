@@ -1,6 +1,6 @@
 # CS2 Generador de Edificios (add-on de Blender)
 
-Add-on de un solo archivo (`cs2_edificio_addon.py`, v2.83, ~16 700 líneas) que genera edificios low-poly
+Add-on de un solo archivo (`cs2_edificio_addon.py`, v2.84, ~16 700 líneas) que genera edificios low-poly
 para Cities: Skylines 2 (y CS1) con LODs, UV, texturas y exportación FBX. Blender 4.2+.
 
 ## Cómo trabajar con Leo
@@ -101,6 +101,15 @@ para Cities: Skylines 2 (y CS1) con LODs, UV, texturas y exportación FBX. Blend
   `editor/README.md`. `engine.py` arma la forma sin cortar por pisos (así las curvas se unen en cadenas), escribe atributos de cara por pared y
   `cs2_slots`, y devuelve malla + reparto de aberturas (`slot_layout`/`slot_effective`) por pared. Probar con `editor/tests/e2e.js`.
 - `create_shape_object(..., pts=)` acepta una planta propia (lo usa el motor). Retranqueos: `make_levels`/`stepped_shape` arman una malla cerrada por tramos (`setbacks:[{from,ins}]`); las ediciones del tramo k de una pared van en `edge.sx[k]`.
+
+## Texturas horneadas sin Cycles (v2.84)
+- `bake_lod` ya no usa Cycles: `uv_transfer` dibuja los triángulos en las UV únicas (PIL, dueño por texel), calcula baricéntricas, muestrea
+  el atlas (bilineal con repetición, como Cycles) y gira las normales del marco tangente del atlas al de la isla (`_uv_frames`); el margen se
+  extiende con un filtro de máximo sobre índices. Comparado con el horneo de Cycles: diferencia media 0,004 en color y 0,001 en normales.
+- `pack` del desenvuelto arranca la bisección en un tope por área (1,3/√Σ w·h·wt²) y corta al 0,2 %: menos intentos, mismo resultado.
+- `tools/perf_tex.py [--prof]`: tiempos y calidad de UV, sombras y texturas en tres edificios (PERF_ONE=1 solo uno).
+- Medido (bpy 5.2.1): total UV+sombras+texturas 22,0→14,4 s (L 5 pisos), 23,3→15,3 s, 27,6→17,8 s; texturas 11-12 s → 3,3-4,6 s.
+- Sombras (`compute_ao_map`): el muestreo adaptativo (8 rayos de prueba) ahorra ~26 % pero deja puntos con hasta 27 % de error: descartado.
 
 ## Herramientas de revisión (headless)
 - `tools/hojas_componentes.py <carpeta> <window|door|balcony>`: hojas de contacto con todos los estilos incluidos.
