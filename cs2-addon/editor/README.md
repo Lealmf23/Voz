@@ -15,6 +15,7 @@ para armar la malla real. Lo que ves en la vista 3D es la malla que genera el ad
 - Elegir una pared: material A–D, giro de textura, estilos propios, vaciarla o restablecerla, copiar a todas.
 - Colocar ventanas, puertas, balcones y vidrieras con fantasma, imán y catálogo con miniaturas (clic sobre una existente la reemplaza).
   Elegir una abertura: cambiar tipo, estilo, medidas, moverla arrastrando, borrarla (Supr).
+- Colores de fachada, materiales B–D, molduras, techo y puertas (se ven en la vista 3D con el color real).
 - Pisos, alto de piso, techo (todos los modelos del add-on), balcones y estilos generales; deshacer/rehacer (Ctrl+Z / Ctrl+Y); guardar y abrir `.json`.
 - «Exportar a CS2»: Blender arma los tres LODs, las UV, las texturas y los FBX en la carpeta que elijas.
 

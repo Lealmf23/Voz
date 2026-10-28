@@ -6,7 +6,12 @@ const el = (tag, attrs = {}, ...kids) => { const e = document.createElement(tag)
 const KINDS = { win: "Ventana", door: "Puerta", bal: "Balcón", shop: "Vidriera" };
 const CATKIND = { win: "window", door: "door", bal: "balcony" };
 const KCOL = { win: 0x4e9bff, door: 0xc08040, bal: 0x4cc38a, shop: 0x38d0e0 };
-const MATC = ["#cfc6b4", "#d9d2c3", "#8a3a28", "#333338", "#a0602a"];
+const DEFC = { facade_color: [.62, .60, .56], mat_b_color: [.30, .073, .046], mat_c_color: [.034, .034, .038], mat_d_color: [.45, .133, .027], trim_color: [.81, .77, .68], roof_color: [.15, .115, .097], door_color: [.066, .039, .021] };
+const l2s = c => c <= .0031308 ? c * 12.92 : 1.055 * Math.pow(c, 1 / 2.4) - .055, s2l = c => c <= .04045 ? c / 12.92 : Math.pow((c + .055) / 1.055, 2.4);
+const toHex = lin => "#" + lin.map(c => Math.round(Math.max(0, Math.min(1, l2s(c))) * 255).toString(16).padStart(2, "0")).join("");
+const fromHex = h => [1, 3, 5].map(i => s2l(parseInt(h.slice(i, i + 2), 16) / 255));
+const colorOf = k => S.props[k] || DEFC[k];
+const matHex = m => toHex(colorOf(["facade_color", "facade_color", "mat_b_color", "mat_c_color", "mat_d_color"][m]));
 const newEdge = () => ({ bulge: 0, mat: 0, rot: 0, ws: "", ds: "", bs: "", ov: {}, add: [] });
 let S = { verts: [], edges: [], floors: 4, floor_h: 3, roof: "FLAT_SLAB", props: { balconies: "alternate" } };
 let closed = false, R = null, CAT = null, online = false;
@@ -200,8 +205,8 @@ function showReal() {
   let st = 0; const mats = []; const used = [...new Set(R.m)].sort((a, b) => a - b);
   for (const mi of used) {
     const c = order.filter(t => R.m[t] === mi).length; g.addGroup(st * 3, c * 3, mats.length); st += c;
-    const nm = R.mats[mi] || "facade"; const col = (R.cols && R.cols[nm] && nm !== "facade") ? lin2srgb(R.cols[nm]) : new T.Color(PAL[nm] ?? 0xcccccc);
-    const m = new T.MeshStandardMaterial({ color: nm === "facade" ? 0xd9d2c3 : (PAL[nm] ?? col), side: T.DoubleSide, roughness: nm.startsWith("gl") ? .15 : .85, metalness: nm.startsWith("gl") ? .2 : 0 });
+    const nm = R.mats[mi] || "facade"; const col = (R.cols && R.cols[nm]) ? lin2srgb(R.cols[nm]) : new T.Color(PAL[nm] ?? 0xcccccc);
+    const m = new T.MeshStandardMaterial({ color: col, side: T.DoubleSide, roughness: nm.startsWith("gl") ? .15 : .85, metalness: nm.startsWith("gl") ? .2 : 0 });
     if (nm === "roof") roofMat = m; mats.push(m);
   }
   g.computeVertexNormals(); const mesh = new T.Mesh(g, mats); mesh.position.set(R.center[0], R.center[1], 0); grpReal.add(mesh); if (roofMat) roofMat.visible = showRoof;
@@ -322,7 +327,7 @@ function sidebar() {
       el("div", { class: "hintline" }, "Arrastrala en la vista 3D para moverla.")));
     sd.append(sec(`Pared ${i + 1}`,
       el("div", { class: "hintline" }, `${wallLen(i).toFixed(1)} m de largo · ${w ? w.slots.filter(x => !x.deleted).length : 0} aberturas`),
-      el("div", { class: "row wrap" }, ...[1, 2, 3, 4].map(m => el("button", { class: "matbtn" + (ed.mat === m ? " on" : ""), title: R && R.mats ? "" : "", onclick: () => { ed.mat = ed.mat === m ? 0 : m; commit(true); }, html: `<span class="sw" style="background:${MATC[m]}"></span>${"ABCD"[m - 1]}` })), el("button", { onclick: () => { ed.mat = 0; commit(true); } }, "Igual al resto")),
+      el("div", { class: "row wrap" }, ...[1, 2, 3, 4].map(m => el("button", { class: "matbtn" + (ed.mat === m ? " on" : ""), title: R && R.mats ? "" : "", onclick: () => { ed.mat = ed.mat === m ? 0 : m; commit(true); }, html: `<span class="sw" style="background:${matHex(m)}"></span>${"ABCD"[m - 1]}` })), el("button", { onclick: () => { ed.mat = 0; commit(true); } }, "Igual al resto")),
       el("div", { class: "row" }, el("label", {}, "Girar textura"), el("div", { class: "seg" }, ...[0, 1, 2, 3].map(r => el("button", { class: ed.rot === r ? "on" : "", onclick: () => { ed.rot = r; commit(true); } }, r * 90 + "°")))),
       numRow("Curvatura", ed.bulge, .5, -12, 12, v => { ed.bulge = v; commit(true); }, "m (0 = recta)"),
       el("div", { class: "row" }, el("label", {}, "Ventanas de esta pared"), ""), stylePicker("win", ed.ws, n => { ed.ws = n || ""; commit(true); }),
@@ -343,6 +348,8 @@ function sidebar() {
     el("div", { class: "row" }, el("label", {}, "Ventanas")), stylePicker("win", S.props.window_style, n => { S.props.window_style = n || "NONE"; if (!n) delete S.props.window_style; commit(true); }, "Predeterminado"),
     el("div", { class: "row" }, el("label", {}, "Puertas")), stylePicker("door", S.props.door_style, n => { S.props.door_style = n || "NONE"; if (!n) delete S.props.door_style; commit(true); }, "Predeterminado"),
     el("div", { class: "row" }, el("label", {}, "Balcones")), stylePicker("bal", S.props.balcony_style, n => { S.props.balcony_style = n || "NONE"; if (!n) delete S.props.balcony_style; commit(true); }, "Predeterminado")));
+  const colRow = (label, k) => { const i = el("input", { type: "color", value: toHex(colorOf(k)), style: "width:44px;height:26px;padding:0;border:1px solid var(--ln);border-radius:5px;background:none" }); i.onchange = () => { S.props[k] = fromHex(i.value); commit(true); }; return el("div", { class: "row" }, el("label", {}, label), i, el("button", { class: "ghost", title: "Volver al color original", onclick: () => { delete S.props[k]; commit(true); } }, "↺")); };
+  sd.append(sec("Colores", colRow("Fachada (A)", "facade_color"), colRow("Material B", "mat_b_color"), colRow("Material C", "mat_c_color"), colRow("Material D", "mat_d_color"), colRow("Molduras", "trim_color"), colRow("Techo", "roof_color"), colRow("Puertas", "door_color")));
   sd.append(sec("Planta", el("div", { class: "row" }, el("label", {}, "Imán de la grilla"), el("select", { onchange: ev => { snapG = +ev.target.value; } }, ...[[.25, "25 cm"], [.5, "50 cm"], [1, "1 m"], [2, "2 m"], [8, "8 m (celda)"]].map(([v, n]) => el("option", { value: v, selected: v === snapG }, n)))),
     el("div", { class: "hintline" }, "Doble clic sobre una pared en la planta agrega una esquina. Clic derecho sobre una esquina la borra.")));
   sd.scrollTop = keep;

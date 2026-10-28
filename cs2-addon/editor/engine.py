@@ -22,7 +22,8 @@ from mathutils import Vector  # noqa: E402
 import cs2_edificio_addon as a  # noqa: E402
 
 ARC_STEP = 12.0      # grados por faceta en las paredes curvas
-GLOBAL_PROPS = {"window_style", "door_style", "balcony_style", "balconies", "facade_color", "string_courses"}
+GLOBAL_PROPS = {"window_style", "door_style", "balcony_style", "balconies", "facade_color", "string_courses",
+                "mat_b_color", "mat_c_color", "mat_d_color", "trim_color", "roof_color", "door_color"}
 
 
 def area(pts):
