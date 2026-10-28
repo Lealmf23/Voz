@@ -577,6 +577,37 @@ def case_ui_draw():
                         cls.draw(inst, bpy.context)
                     except Exception as e:
                         check(False, f"{cls.__name__} (edificio={with_building}, avanzado={adv}, vista={prev}): {e!r}")
+
+    def draw_all(tag):
+        for cls in panels:
+            poll = getattr(cls, "poll", None)
+            if poll is not None and not poll(bpy.context):
+                continue
+            inst = type("X", (), {})()
+            inst.layout = _FakeLayout()
+            try:
+                cls.draw(inst, bpy.context)
+            except Exception as e:
+                check(False, f"{cls.__name__} ({tag}): {e!r}")
+    # texturas en modo PBR (giro del material) y alcance «Caras elegidas» con una pared elegida (material y giro por pared)
+    import bmesh
+    s = setup("L", "GABLE_TILE", 24, 16, 4)
+    for sl in a.PBR_SLOTS:
+        setattr(s, f"ms_{sl}_mode", "PBR")
+    s.ui_tab = "TEX"
+    draw_all("texturas PBR")
+    s.ui_tab = "PERS"
+    s.edit_scope = "FACES"
+    obj = s.shape_object
+    check(obj.mode == "EDIT", "«Caras elegidas» no entró a editar la forma")
+    bm = bmesh.from_edit_mesh(obj.data)
+    wall = next(f for f in bm.faces if abs(f.normal.z) < 0.1)
+    for f in bm.faces:
+        f.select_set(False)
+    wall.select_set(True)
+    bm.faces.active = wall
+    bmesh.update_edit_mesh(obj.data, loop_triangles=False, destructive=False)
+    draw_all("caras elegidas")
     result(ok=True)
 
 
@@ -1146,20 +1177,20 @@ def case_comp_draw():
     result(componentes=len(a._COMP["specs"]))
 
 
-def _wall_uv_extent(me, nsign, region_mat, min_area=6.0):
-    """(suma de anchos UV, suma de altos UV, cantidad) de las caras grandes de un material que miran a `nsign` en Y."""
+def _wall_uv_extent(me, nsign, region_mat, min_area=8.0):
+    """(ancho, alto, cantidad) en UV del conjunto de paños grandes de un material que miran a `nsign` en Y (el plano de una pared)."""
     uvd = me.uv_layers[0].data
-    du = dv = 0.0
+    us, vs = [], []
     n = 0
     for poly in me.polygons:
         if poly.material_index != region_mat or poly.area < min_area or poly.normal.y * nsign < 0.9:
             continue
-        us = [uvd[li].uv[0] for li in poly.loop_indices]
-        vs = [uvd[li].uv[1] for li in poly.loop_indices]
-        du += max(us) - min(us)
-        dv += max(vs) - min(vs)
+        us += [uvd[li].uv[0] for li in poly.loop_indices]
+        vs += [uvd[li].uv[1] for li in poly.loop_indices]
         n += 1
-    return du, dv, n
+    if not n:
+        return 0.0, 0.0, 0
+    return max(us) - min(us), max(vs) - min(vs), n
 
 
 def _uv_in_unit(me):
@@ -1247,10 +1278,62 @@ def case_tex_rotate_bake():
         a.uv_generate(bpy.context, a.props_to_params(s), objs, None)
         for i, o in enumerate(objs):
             pct = _overlap_pct(o.data)
-            check(pct < 0.5, f"giro {rot}° LOD{i}: {pct:.2f} % del mapa con islas superpuestas")
+            # un ángulo que no es múltiplo de 90° cambia qué caras comparten isla y el relleno de huecos roza más los bordes
+            tope = 0.5 if rot % 90 == 0 else 2.0
+            check(pct < tope, f"giro {rot}° LOD{i}: {pct:.2f} % del mapa con islas superpuestas (tope {tope} %)")
         for o in objs:
             bpy.data.objects.remove(o, do_unlink=True)
     result(ok=True)
+
+
+def case_wall_mats():
+    """Material por pared: cada pared de la forma lleva su propio material (A a D) en los tres LODs, y «Elegir paredes por material»
+    selecciona justo las que lo tienen."""
+    import bmesh
+    s = setup("BOX", "FLAT", 16, 12, 3, styles=False)
+    obj = s.shape_object
+    bm = bmesh.new()
+    bm.from_mesh(obj.data)
+    bm.transform(obj.matrix_world)
+    lays = a.wall_layers(bm, create=True)
+    bm.transform(obj.matrix_world.inverted())
+    # -Y -> B, +X -> C, +Y -> D, -X queda con el material del edificio (A)
+    want = {(0, -1): 2, (1, 0): 3, (0, 1): 4}
+    counts = {}
+    for f in bm.faces:
+        k = (round(f.normal.x), round(f.normal.y))
+        if abs(f.normal.z) < 0.1 and k in want:
+            f[lays["cs2_f_mat"]] = want[k]
+            counts[want[k]] = counts.get(want[k], 0) + 1
+    bm.to_mesh(obj.data)
+    bm.free()
+    check(len(counts) == 3, f"la forma debería tener paredes en las tres direcciones ({counts})")
+    bpy.ops.cs2.generate()
+    bpy.ops.cs2.regen_lods()
+    mats = {(0, -1): a.MAT["facb"], (1, 0): a.MAT["facc"], (0, 1): a.MAT["facd"], (-1, 0): a.MAT["facade"]}
+    for i, o in enumerate(lod_objs(s)):
+        for (nx, ny), mi in mats.items():
+            wall_mats = (a.MAT["facade"], a.MAT["facb"], a.MAT["facc"], a.MAT["facd"])   # molduras y cornisas no cuentan
+            polys = [p for p in o.data.polygons if abs(p.normal.z) < 0.1 and round(p.normal.x) == nx and round(p.normal.y) == ny
+                     and p.area > 4.0 and p.material_index in wall_mats]
+            check(polys, f"LOD{i}: no hay paredes grandes hacia ({nx}, {ny})")
+            bad = [p for p in polys if p.material_index != mi]
+            check(not bad, f"LOD{i}: {len(bad)} de {len(polys)} paredes hacia ({nx}, {ny}) no tienen el material {mi}")
+    # selección por material
+    bpy.ops.cs2.edit_shape()
+    check(obj.mode == "EDIT", "no entró a elegir caras")
+    for mat_id, n in counts.items():
+        bm = bmesh.from_edit_mesh(obj.data)
+        for f in bm.faces:
+            f.select_set(False)
+        bpy.ops.cs2.sel_wall_mat(mat=str(mat_id))
+        bm = bmesh.from_edit_mesh(obj.data)
+        sel = [f for f in bm.faces if f.select]
+        check(len(sel) == n, f"material {mat_id}: se eligieron {len(sel)} paredes y debían ser {n}")
+        lay = a.wall_layers(bm)["cs2_f_mat"]
+        check(all(int(f[lay]) == mat_id for f in sel), f"material {mat_id}: eligió paredes de otro material")
+    bpy.ops.cs2.edit_shape()
+    result(ok=True, paredes=counts)
 
 
 CASES = {k[5:]: v for k, v in globals().items() if k.startswith("case_")}

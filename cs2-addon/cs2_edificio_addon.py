@@ -2003,6 +2003,31 @@ def window_cell(mode, key):
     return 1 + (zlib.crc32(key.encode("utf-8")) % 23)
 
 
+WALL_REGIONS = ("facade", "facb", "facc", "facd")
+
+
+def _uv_turn(pts, deg):
+    """Gira (grados) una lista de puntos planos. Los múltiplos de 90° son exactos (sin error de redondeo)."""
+    q = round(deg / 90.0)
+    if abs(deg - q * 90.0) < 1e-6:
+        c, s_ = (1.0, 0.0, -1.0, 0.0)[q % 4], (0.0, 1.0, 0.0, -1.0)[q % 4]
+    else:
+        r = math.radians(deg)
+        c, s_ = math.cos(r), math.sin(r)
+    return [(x * c - y * s_, x * s_ + y * c) for x, y in pts]
+
+
+def face_uv_turn(p, region, wall_quarters=0):
+    """Giro total (0 a 360°) de la textura de una cara: el del material más el de su pared (en cuartos de vuelta)."""
+    try:
+        deg = float(((p.get("matslots") or {}).get(region) or {}).get("rot", 0.0))
+    except (TypeError, ValueError):
+        deg = 0.0
+    if region in WALL_REGIONS:
+        deg += 90.0 * int(wall_quarters)
+    return deg % 360.0
+
+
 def finish_bmesh(bm, p):
     """Une vértices repetidos y genera las UVs del atlas."""
     bmesh.ops.remove_doubles(bm, verts=bm.verts, dist=1e-5)
@@ -2013,6 +2038,7 @@ def finish_bmesh(bm, p):
     bm.normal_update()
     uv_layer = bm.loops.layers.uv.active
     flag = bm.faces.layers.int.get("is_piece")
+    trot = bm.faces.layers.int.get("trot")
     zax = Vector((0, 0, 1))
     if not bm.verts:
         return
@@ -2042,10 +2068,15 @@ def finish_bmesh(bm, p):
             region = "facade"
         pts = planar(face)
         nrm = face.normal
+        turn = face_uv_turn(p, region, face[trot] if trot is not None else 0)
+        if turn:
+            pts = _uv_turn(pts, turn)
         if abs(nrm.z) < 0.7:  # cada pared (plano) tiene su propio origen: la textura sigue continua entre caras
             key = (region, round(nrm.x, 2), round(nrm.y, 2), round(face.verts[0].co.dot(nrm), 2))
         else:
             key = (region, "top")
+        if turn:
+            key += (round(turn, 3),)
         mapped.append((face, region, key, pts))
         mn = mins.setdefault(key, [1e9, 1e9, -1e9, -1e9])
         mn[0], mn[1] = min(mn[0], min(q[0] for q in pts)), min(mn[1], min(q[1] for q in pts))
@@ -2222,7 +2253,7 @@ PORCH_FLOATS = ("d", "w", "off", "ext", "ph", "dh", "pitch", "sp", "sz")
 PORCH_DEF = dict(on=2, roof=2, rail=2, enc=1, stp=1, lv=1, dmat=5, pmat=1,
                  d=1.5, w=3.2, off=0.0, ext=0.0, ph=2.5, dh=0.2, pitch=20.0, sp=2.2, sz=1.0)
 WALL_INT_ATTRS = ("cs2_flags", "cs2_w_count", "cs2_door_mode", "cs2_bal_mode", "cs2_w_style", "cs2_d_style", "cs2_b_style",
-                  "cs2_f_mat", "cs2_p_mode", "cs2_p_mat", "cs2_c_mat", "cs2_s_mode", "cs2_s_mat",
+                  "cs2_f_mat", "cs2_f_rot", "cs2_p_mode", "cs2_p_mat", "cs2_c_mat", "cs2_s_mode", "cs2_s_mat",
                   "cs2_k_mode", "cs2_k_bmat", "cs2_k_mmat", "cs2_k_fmat", "cs2_k_finn",
                   "cs2_k_prof", "cs2_k_pat", "cs2_k_patn", "cs2_k_basemat", "cs2_k_capmat") + tuple("cs2_o_" + k for k in PORCH_INTS) + tuple("cs2_r_" + k for k in ROOF_KEYS_INT)
 WALL_FLOAT_ATTRS = ("cs2_w_w", "cs2_w_h", "cs2_w_sill", "cs2_w_depth", "cs2_w_off",
@@ -2261,7 +2292,7 @@ def face_cfg(f, lays):
     cfg = {name[4:]: f[lay] for name, lay in lays.items()}
     if not cfg:
         return None
-    if not (cfg.get("flags") or cfg.get("f_mat") or cfg.get("door_mode") or cfg.get("bal_mode")
+    if not (cfg.get("flags") or cfg.get("f_mat") or cfg.get("f_rot") or cfg.get("door_mode") or cfg.get("bal_mode")
             or cfg.get("w_style") or cfg.get("d_style") or cfg.get("b_style") or cfg.get("k_mode")):
         return None
     return cfg
@@ -4581,12 +4612,19 @@ def build_bmesh_shape_iter(p, lod, shape):
 def _build_shape_steps(bm, p, lod, shape):
     bm.loops.layers.uv.new("UVMap")
     bm.faces.layers.int.new("is_piece")
+    trot = bm.faces.layers.int.new("trot")     # giro de la textura de la pared, en cuartos de vuelta
     p["_dissolve"] = lod >= 1
     p["_lod"] = lod
     p["_bands"] = []
     nw = max(1, len(shape["walls"]))
     for wid, (pts, n, cfg) in enumerate(shape["walls"]):
+        q = int((cfg or {}).get("f_rot", 0)) % 4
+        before = set(bm.faces) if q else None
         build_wall(bm, pts, n, p, wid, lod, cfg)
+        if q:
+            for f_ in bm.faces:
+                if f_ not in before:
+                    f_[trot] = q
         yield 0.85 * (wid + 1) / (nw + 1), f"LOD{lod}: pared {wid + 1} de {nw}"
     if p["_bands"]:
         add_band_group(bm, p["_bands"], 0.05, p["string_out"], MAT["trim"])
@@ -4752,7 +4790,10 @@ def props_to_params(s, seed=None):
     for sl in ("facade", "facb", "facc", "facd"):
         d = (p.get("matslots") or {}).get(sl)
         if d is not None:
-            d["_ty"] = slot_tile_y(d, fh)
+            if slot_quarter_turn(d):      # el piso se repite sobre u: se estira el ancho de la repetición, no el alto
+                d["_tx"] = slot_tile_y(d, fh, axis=0)
+            else:
+                d["_ty"] = slot_tile_y(d, fh)
     return p
 
 
@@ -5233,7 +5274,7 @@ PBR_MAP_FIELDS = (("img_color", "Difuso (color)"), ("img_normal", "Normal"), ("i
                   ("img_metal", "Metálico"), ("img_ao", "Oclusión (AO)"), ("img_emis", "Emisivo"))
 SLOT_DEFAULTS = dict(mode="FLAT", set="", img_color="", img_normal="", img_rough="", img_metal="", img_ao="", img_emis="",
                      tint=(1.0, 1.0, 1.0), tile=2.0, nstr=1.0, flipg=False, gmode="ROUGH", metal=0.0, gloss=0.15,
-                     gmult=1.0, coat=0.0, aostr=1.0, emis_col=(0.0, 0.0, 0.0), emis_str=1.0, cmask="0", snow=True)
+                     gmult=1.0, coat=0.0, aostr=1.0, emis_col=(0.0, 0.0, 0.0), emis_str=1.0, cmask="0", snow=True, rot=0.0)
 _TILE_CACHE = {}
 
 
@@ -5280,19 +5321,29 @@ def _read_tile(path, w, h):
 _PERIOD_CACHE = {}
 
 
-def slot_tile_y(sl, floor_h):
+def slot_tile_y(sl, floor_h, axis=1):
     """Alto (m) con que se repite la textura de un sector en vertical: el pedido, estirado un poco (pocos %) para que
     el alto de piso sea un número entero de períodos del dibujo (hiladas). Así todos los pisos caen en la misma fase del
-    ladrillo y los paneles iguales de pisos distintos pueden compartir isla sin que se corran."""
+    ladrillo y los paneles iguales de pisos distintos pueden compartir isla sin que se corran.
+    Con axis=0 hace lo mismo en horizontal (textura girada 90°: la altura del piso cae sobre el eje u del sector)."""
     tl = max(0.05, float(sl.get("tile", SLOT_DEFAULTS["tile"])))
     path = sl.get("img_color", "")
     if sl.get("mode") != "PBR" or not path or floor_h <= 0.2:
         return tl
-    _fx, fy = _pattern_period(path)
-    per = tl * fy
+    fp = _pattern_period(path)[0 if axis == 0 else 1]
+    per = tl * fp
     n = max(1, round(floor_h / per))
-    ty = floor_h / (n * fy)
+    ty = floor_h / (n * fp)
     return ty if abs(ty / tl - 1.0) <= 0.15 else tl
+
+
+def slot_quarter_turn(sl):
+    """True si la textura del material va girada un cuarto de vuelta (90° o 270°)."""
+    try:
+        r = float(sl.get("rot", 0.0)) % 180.0
+    except (TypeError, ValueError):
+        return False
+    return abs(r - 90.0) < 1e-3
 
 
 def _pattern_period(path):
@@ -5356,7 +5407,7 @@ def slot_maps(name, sl, flat_rgb, W, H, ppm):
     emis = np.zeros((H, W, 3), np.float32)
     emis[:] = np.clip(np.array(sl["emis_col"][:3], np.float32) * sl["emis_str"], 0.0, 1.0)
     if sl["mode"] == "PBR":
-        pp = int(max(16, min(1024, round(sl["tile"] * ppm))))
+        pp = int(max(16, min(1024, round(float(sl.get("_tx") or sl["tile"]) * ppm))))
         ppy = int(max(16, min(1024, round(float(sl.get("_ty") or sl["tile"]) * ppm))))
 
         def tile(path):
@@ -6061,7 +6112,8 @@ class _Unwrapper:
                 ry = min((atlas_uv.data[li].uv[1] - v0_) / ext_ for li in poly.loop_indices)
                 fx_, fy_ = _pattern_period(sl_.get("img_color", "")) if sl_.get("img_color") else (1.0, 1.0)
                 tly = float(sl_.get("_ty") or tl)
-                Px, Py = max(0.04, tl * fx_), max(0.04, tly * fy_)      # período real del dibujo, en metros
+                tlx = float(sl_.get("_tx") or tl)
+                Px, Py = max(0.04, tlx * fx_), max(0.04, tly * fy_)      # período real del dibujo, en metros
                 if self.align and sl_.get("img_color"):
                     nqx, nqy = max(1, round(Px / step)), max(1, round(Py / step))
                     phase = (round((rx % Px) / step) % nqx if self.align_x else 0, round((ry % Py) / step) % nqy)
@@ -8595,6 +8647,7 @@ PAN_MAT_ITEMS = [("1", "Material B", ""), ("2", "Material C", ""), ("3", "Materi
 SURF_MAT_ITEMS = [("1", "Molduras", ""), ("2", "Fachada (A)", ""), ("3", "Material B", ""),
                   ("4", "Material C", ""), ("5", "Material D", "")]
 SLT_MODE_ITEMS = [("0", "Ninguna", ""), ("1", "Verticales", ""), ("2", "Horizontales", "")]
+WALL_ROT_ITEMS = [("0", "Sin girar", ""), ("1", "90°", "Un cuarto de vuelta"), ("2", "180°", "Media vuelta"), ("3", "270°", "Tres cuartos de vuelta")]
 WALL_MAT_ITEMS = [("0", "Igual al edificio", ""), ("1", "A (fachada)", ""), ("2", "B (ladrillo)", ""),
                   ("3", "C (gris oscuro)", ""), ("4", "D (madera)", "")]
 GLOBAL_MAT_ITEMS = WALL_MAT_ITEMS[1:]
@@ -9055,7 +9108,7 @@ def _mode_update(attr):
         faces = _selected_faces(bm)
         if not faces:
             return
-        val = int(getattr(self, {"cs2_door_mode": "door_mode", "cs2_bal_mode": "bal_mode", "cs2_f_mat": "f_mat", "cs2_k_mode": "cw_mode"}[attr]))
+        val = int(getattr(self, {"cs2_door_mode": "door_mode", "cs2_bal_mode": "bal_mode", "cs2_f_mat": "f_mat", "cs2_f_rot": "f_rot", "cs2_k_mode": "cw_mode"}[attr]))
         for f in faces:
             f[lays[attr]] = val
         bmesh.update_edit_mesh(obj.data, loop_triangles=False, destructive=False)
@@ -9131,6 +9184,9 @@ class CS2WallProps(bpy.types.PropertyGroup):
                            description="Desplaza los balcones de la pared a lo largo de ella")
     f_mat: EnumProperty(name="Material de la pared", default="0", items=WALL_MAT_ITEMS,
                         update=_mode_update("cs2_f_mat"))
+    f_rot: EnumProperty(name="Giro de la textura", default="0", items=WALL_ROT_ITEMS,
+                        update=_mode_update("cs2_f_rot"),
+                        description="Gira la textura de esta pared (se suma al giro del material). Se ve al actualizar el edificio")
     use_pan: BoolProperty(name="Personalizar paños", default=False, update=_wall_update("pan"))
     pan_mode: EnumProperty(name="Paños de color", default="2", items=PAN_MODE_ITEMS[1:] if False else PAN_MODE_ITEMS,
                            update=_wall_update("pan"))
@@ -9358,6 +9414,10 @@ def _install_matslot_props():
                                                   description="Multiplica el difuso (blanco = sin cambio)")
         ba[f"ms_{sl}_tile"] = FloatProperty(name="Repetición cada (m)", default=2.0, min=0.1, max=30.0, update=_on_change,
                                             description="Cuántos metros del edificio cubre una repetición de la textura")
+        ba[f"ms_{sl}_rot"] = FloatProperty(name="Giro de la textura (°)", default=0.0, min=-180.0, max=180.0, step=500, precision=0,
+                                           update=_on_change,
+                                           description="Gira la textura de este material sobre todas sus caras (por ejemplo ladrillo horizontal o vertical). "
+                                                       "Se ve al actualizar el edificio. Los ángulos que no son múltiplos de 90° agrandan el espacio que ocupa en el mapa")
         ba[f"ms_{sl}_nstr"] = FloatProperty(name="Fuerza del normal", default=1.0, min=0.0, max=3.0, update=_on_change)
         ba[f"ms_{sl}_flipg"] = BoolProperty(name="Normal DirectX (invertir verde)", default=False, update=_on_change,
                                             description="El juego usa OpenGL. Activalo si el mapa es DirectX")
@@ -9489,6 +9549,7 @@ def load_wall_ui(context):
         w.bal_w = val("cs2_b_w", FLAG_BAL, s.win_w + 0.8)
         w.bal_rail = val("cs2_b_rail", FLAG_BAL, 0.9)
         w.f_mat = str(int(f[lays["cs2_f_mat"]])) if "cs2_f_mat" in lays else "0"
+        w.f_rot = str(int(f[lays["cs2_f_rot"]]) % 4) if "cs2_f_rot" in lays else "0"
         w.cw_mode = str(int(f[lays["cs2_k_mode"]])) if "cs2_k_mode" in lays else "0"
         w.use_cw = bool(fl & FLAG_CW)
         w.cw_mw = val("cs2_k_mw", FLAG_CW, 1.5)
@@ -12602,7 +12663,14 @@ class CS2_PT_rev(bpy.types.Panel):
                     box.prop(s, name)
         else:
             w = context.scene.cs2_wall
-            lay.prop(w, "f_mat")
+            box = lay.box()
+            box.label(text="Textura de las paredes elegidas", icon="MATERIAL")
+            box.prop(w, "f_mat")
+            box.prop(w, "f_rot", expand=True)
+            row = box.row(align=True)
+            row.label(text="Elegir las del material:")
+            for k_, lab_ in (("1", "A"), ("2", "B"), ("3", "C"), ("4", "D")):
+                row.operator("cs2.sel_wall_mat", text=lab_).mat = k_
             for use, names, title in (("use_pan", ("pan_mode", "pan_mat", "pan_pad", "pan_prob"), "Paños de color"),
                                       ("use_cas", ("cas_w", "cas_d", "cas_mat"), "Marcos salientes"),
                                       ("use_slt", ("slt_mode", "slt_gap", "slt_w", "slt_d", "slt_mat"), "Lamas")):
@@ -13053,6 +13121,55 @@ class CS2_OT_copy_report(bpy.types.Operator):
         print(txt)
         n = len(_ERRLOG)
         self.report({"INFO"}, "Informe copiado" + (f" ({n} error{'es' if n != 1 else ''} registrado{'s' if n != 1 else ''})" if n else " (sin errores)"))
+        return {"FINISHED"}
+
+
+class CS2_OT_sel_wall_mat(bpy.types.Operator):
+    bl_idname = "cs2.sel_wall_mat"
+    bl_label = "Elegir paredes por material"
+    bl_description = "Agrega a la selección todas las paredes de la forma que tienen ese material (A, B, C o D); sirve para cambiarlas juntas"
+    bl_options = {"REGISTER", "UNDO"}
+    mat: StringProperty(default="1")
+
+    def execute(self, context):
+        obj = _edit_shape_obj(context)
+        if obj is None:
+            self.report({"WARNING"}, "Primero entrá a elegir caras")
+            return {"CANCELLED"}
+        bm = bmesh.from_edit_mesh(obj.data)
+        lays = wall_layers(bm)
+        lay = lays.get("cs2_f_mat")
+        want = int(self.mat)
+        n = 0
+        for f in bm.faces:
+            if abs(f.normal.z) > 0.12:
+                continue
+            if (int(f[lay]) if lay is not None else 0) == want:
+                f.select_set(True)
+                n += 1
+        bm.select_flush_mode()
+        bmesh.update_edit_mesh(obj.data, loop_triangles=False, destructive=False)
+        if not n:
+            self.report({"INFO"}, "Ninguna pared tiene ese material")
+        return {"FINISHED"}
+
+
+class CS2_OT_slot_rot(bpy.types.Operator):
+    bl_idname = "cs2.slot_rot"
+    bl_label = "Girar textura"
+    bl_description = "Gira la textura del material (0 = volver al giro original). Se ve al actualizar el edificio"
+    bl_options = {"REGISTER", "UNDO"}
+    slot: StringProperty(default="facade")
+    delta: FloatProperty(default=90.0)
+
+    def execute(self, context):
+        s = context.scene.cs2_building
+        name = f"ms_{self.slot}_rot"
+        if self.slot not in PBR_SLOTS or not hasattr(s, name):
+            return {"CANCELLED"}
+        cur = getattr(s, name)
+        new = 0.0 if self.delta == 0.0 else ((cur + self.delta + 180.0) % 360.0) - 180.0
+        setattr(s, name, new)
         return {"FINISHED"}
 
 
@@ -13532,6 +13649,13 @@ class CS2_PT_mats(bpy.types.Panel):
                     box.prop(s, f"ms_{sl}_{k}")
                 box.prop(s, f"ms_{sl}_tint")
                 box.prop(s, f"ms_{sl}_tile")
+                rr = box.row(align=True)
+                rr.prop(s, f"ms_{sl}_rot")
+                for lab_, d_ in (("-90°", -90.0), ("+90°", 90.0)):
+                    op = rr.operator("cs2.slot_rot", text=lab_)
+                    op.slot, op.delta = sl, d_
+                op = rr.operator("cs2.slot_rot", text="", icon="X")
+                op.slot, op.delta = sl, 0.0
                 box.prop(s, f"ms_{sl}_nstr")
                 box.prop(s, f"ms_{sl}_flipg")
                 box.prop(s, f"ms_{sl}_gmode")
@@ -14700,8 +14824,8 @@ def _componentes():
              desc="Acabados de pared: materiales, paños de color, marcos salientes y lamas",
              wall_groups=[("pan", "use_pan", "Paños de color"), ("cas", "use_cas", "Marcos salientes"),
                           ("slt", "use_slt", "Lamas")],
-             wall_modes=[("cs2_f_mat", "f_mat")],
-             groups=[("Materiales", [_F("wall_mat_g", "f_mat"), _F("ground_mat_g", None),
+             wall_modes=[("cs2_f_mat", "f_mat"), ("cs2_f_rot", "f_rot")],
+             groups=[("Materiales", [_F("wall_mat_g", "f_mat"), _F(None, "f_rot"), _F("ground_mat_g", None),
                                      _F("ground_n_g", None, vis=lambda o: o.ground_mat_g != "0"), _F("frm_mat_g", None)], None),
                      ("Paños de color alrededor de ventanas",
                       [_F("pan_mode_g", "pan_mode"), _F("pan_mat_g", "pan_mat", vis=lambda o: _pan_on(o)),
@@ -15285,7 +15409,7 @@ classes = (CS2BuildingProps, CS2WallProps, CS2_OT_generate, CS2_OT_cancel_genera
            CS2_OT_edit_shape, CS2_OT_floor, CS2_OT_split_floors, CS2_OT_select_band,
            CS2_OT_wall_reset, CS2_OT_style_step, CS2_OT_style_folder, CS2_OT_style_reload,
            CS2_OT_thumbs_all, CS2_OT_refresh, CS2_OT_look, CS2_OT_porch, CS2_OT_roof_apply, CS2_OT_roof_clear, CS2_OT_pbr_pick, CS2_OT_pbr_folder, CS2_OT_pbr_clear, CS2_OT_atlas_view, CS2_OT_make_textures,
-           CS2_OT_uv_generate, CS2_OT_bake_ao, CS2_OT_tex_assign, CS2_OT_tex_clear, CS2_OT_copy_report, CS2_OT_retexture, CS2StyleProps, CS2_OT_style_load, CS2_OT_style_save, CS2_OT_style_delete, CS2_OT_style_use,
+           CS2_OT_uv_generate, CS2_OT_bake_ao, CS2_OT_tex_assign, CS2_OT_slot_rot, CS2_OT_sel_wall_mat, CS2_OT_tex_clear, CS2_OT_copy_report, CS2_OT_retexture, CS2StyleProps, CS2_OT_style_load, CS2_OT_style_save, CS2_OT_style_delete, CS2_OT_style_use,
            CS2_OT_style_preview, CS2_OT_style_catalog, CS2_OT_style_export, CS2_OT_style_import, CS2_OT_style_refresh, CS2_OT_style_apply,
            CS2_OT_ficha_clip, CS2_OT_ficha_file, CS2_OT_ficha_prompt, CS2_OT_type_template,
            CS2_OT_preview_update, CS2_OT_uv_zone, CS2_OT_uv_pin, CS2_OT_uv_view,
