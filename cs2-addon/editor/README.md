@@ -8,6 +8,14 @@ para armar la malla real. Lo que ves en la vista 3D es la malla que genera el ad
 - Linux/Mac: `BLENDER=/ruta/blender ./iniciar_editor.sh`. Sin Blender instalado: `pip install bpy numpy pillow` y `python3 engine.py --open`.
 - Se abre http://127.0.0.1:8765. El motor corre en tu PC y no manda nada a internet.
 
+## Cómo se usa (resumen)
+Arriba hay una guía de 5 pasos (Planta · Paredes · Aberturas · Techo y color · Exportar). Al abrir, elegís una planta de partida o dibujás la tuya.
+El botón **Planta** (D) edita la planta que ya tenés (nunca la borra; para empezar de cero está **Nuevo**). El panel derecho tiene pestañas:
+Selección/Paredes, Edificio, Estilo, **Opciones** (todas las opciones de los cuadros de componentes del add-on: ventana, puerta, balcón, muro cortina,
+paredes, retícula, planta comercial, techo, cornisas y porche, con buscador) y Retranqueo. Con una pared elegida, «Solo esta pared» cambia esas
+opciones únicamente en ella. `engine.py` publica el esquema en `/schema` leyendo las propiedades del add-on, así que las opciones nuevas del
+add-on aparecen solas.
+
 ## Qué se puede hacer
 - Dibujar la planta con clics (se pega a la grilla; las líneas gruesas son las celdas de 8 m de CS2), mover esquinas, doble clic para agregar,
   clic derecho para borrar; plantas rápidas (caja, L, U, T, torre redonda, frente curvo).

@@ -17,7 +17,7 @@ const NOSEL = () => ({ edge: null, sec: 0, slot: null, vert: null });
 const ES = (i, sec = 0) => sec ? ((E()[i].sx = E()[i].sx || {})[sec] = E()[i].sx[sec] || { ov: {}, add: [] }) : E()[i];
 const Wk = (i, sec = 0) => R && R.walls.find(w => w.edge === i && w.sec === sec);
 let S = { verts: [], edges: [], setbacks: [], floors: 4, floor_h: 3, roof: "FLAT_SLAB", props: { balconies: "alternate" } };
-let closed = false, R = null, CAT = null, online = false;
+let closed = false, R = null, CAT = null, SCH = null, online = false;
 let sel = NOSEL();
 let tool = "select", brush = { win: null, door: null, bal: null };
 let snapG = 1, showRoof = true, viewMode = "both";
@@ -58,7 +58,7 @@ async function doBuild() {
   if (pending) { pending = false; doBuild(); }
 }
 function setOnline(v) { online = v; $("dot").className = "dot " + (v ? "ok" : ""); $("engtxt").textContent = v ? "Motor Blender conectado" : "Motor sin conexión"; }
-async function loadCatalog() { try { CAT = await (await fetch("/catalog")).json(); setOnline(true); } catch { CAT = { window: [], door: [], balcony: [], roofs: [], mats: [] }; setOnline(false); } sidebar(); }
+async function loadCatalog() { try { CAT = await (await fetch("/catalog")).json(); SCH = await (await fetch("/schema")).json(); setOnline(true); } catch { CAT = { window: [], door: [], balcony: [], roofs: [], mats: [] }; setOnline(false); } sidebar(); }
 
 // ================= cambios =================
 function changed(rebuild = true, redraw = true) {
@@ -66,7 +66,7 @@ function changed(rebuild = true, redraw = true) {
   fixSetbacks();
   if (rebuild) { if (closed) requestBuild(); else { R = null; showReal(); } }
   try { localStorage.setItem("cs2ed", snap()); } catch { }
-  drawAll(); sidebar(); stats(); hintText();
+  drawAll(); sidebar(); stats(); hintText(); welcome(); guide();
 }
 function stats() {
   const b = $("bot"); b.innerHTML = "";
@@ -94,17 +94,21 @@ function drawTools() {
   }
 }
 function setTool(t) {
-  tool = t; if (t === "draw" && closed) { toast("Planta nueva (Ctrl+Z para volver a la anterior)"); S.verts = []; S.edges = []; S.setbacks = []; closed = false; R = null; sel = NOSEL(); showReal(); commit(false); }
-  ghost.visible = false; drawTools(); drawAll(); hintText(); sidebar(); showCat();
+  tool = t;
+  ghost.visible = false; $("tip").style.display = "none"; drawTools(); drawAll(); hintText(); sidebar(); showCat(); guide(); welcome();
 }
 function hintText() {
   const h = $("hint"); const m = {
-    select: closed ? "<b>Clic</b> en una pared o abertura para elegirla · arrastrá una abertura para moverla · <b>Supr</b> la borra" : "Elegí una planta rápida arriba o tocá <b>Planta</b> para dibujar la tuya.",
-    draw: closed ? "" : (S.verts.length ? "<b>Clic</b> para poner otra esquina · clic en el punto amarillo (o <b>Enter</b>) para cerrar · <b>Esc</b> cancela" : "<b>Clic</b> en la grilla para poner la primera esquina"),
+    select: closed ? "<b>Clic</b> en una pared o abertura para elegirla · arrastrá una abertura para moverla · <b>Supr</b> la borra" : "",
+    draw: closed ? "Modo <b>planta</b>: arrastrá las esquinas · <b>clic en un lado</b> agrega una esquina · <b>clic derecho</b> en una esquina la borra" : (S.verts.length ? "<b>Clic</b> para poner otra esquina · clic en el punto amarillo (o <b>Enter</b>) para cerrar · <b>Esc</b> cancela" : "<b>Clic</b> en la grilla para poner la primera esquina"),
     win: "Pasá el mouse por una pared y hacé <b>clic</b> para poner una ventana. Sobre una existente, la reemplaza.", door: "<b>Clic</b> en una pared para poner una puerta.",
     bal: "<b>Clic</b> en una pared para poner un balcón.", shop: "<b>Clic</b> para poner una vidriera comercial."
   }; h.innerHTML = m[tool] || "";
 }
+function tip(e, text) { const t = $("tip"); if (!text) { t.style.display = "none"; return; } const r = $("main").getBoundingClientRect(); t.textContent = text; t.style.display = "block"; t.style.left = (e.clientX - r.left + 14) + "px"; t.style.top = (e.clientY - r.top + 16) + "px"; }
+const GUIDE = [["1", "Planta", () => { tab = "bld"; setTool("draw"); }, () => tool === "draw"], ["2", "Paredes", () => { tab = "sel"; setTool("select"); }, () => tool === "select" && tab === "sel"], ["3", "Aberturas", () => setTool("win"), () => ["win", "door", "bal", "shop"].includes(tool)], ["4", "Techo y color", () => { tab = "sty"; setTool("select"); }, () => tool === "select" && (tab === "sty" || tab === "bld")], ["5", "Exportar", () => $("bExport").click(), () => false]];
+function guide() { const g = $("guide"); g.innerHTML = ""; GUIDE.forEach(([n, t, fn, on]) => g.append(el("button", { class: on() ? "on" : "", onclick: fn, html: `<b>${n}</b>${t}` }))); }
+let tab = "sel";
 
 // ================= planta 2D =================
 const pc = $("plan"), pg = pc.getContext("2d"); const view = { cx: 0, cy: 0, s: 14 };
@@ -161,8 +165,9 @@ pc.addEventListener("pointerdown", e => {
   }
   if (closed) {
     if (sel.edge != null) { const h = bulgeHandle(sel.edge), [a, b] = w2s(...h); if (Math.hypot(a - px, b - py) < 11) { dragB = { i: sel.edge, pre: snap() }; return; } }
-    const v = nearVert(px, py); if (v != null) { sel = { edge: null, slot: null, vert: v }; dragV = { i: v, pre: snap(), moved: false }; drawAll(); sidebar(); return; }
-    const ed = nearEdge(px, py); if (ed != null) { sel = { edge: ed, slot: null, vert: null }; if (e.detail === 2) insertVert(ed, s2w(px, py)); drawAll(); sidebar(); return; }
+    const v = nearVert(px, py); if (v != null) { tab = "sel"; sel = { edge: null, slot: null, vert: v }; dragV = { i: v, pre: snap(), moved: false }; drawAll(); sidebar(); return; }
+    const ed = nearEdge(px, py); if (ed != null && tool === "draw") { insertVert(ed, s2w(px, py)); return; }
+    if (ed != null) { sel = { edge: ed, sec: 0, slot: null, vert: null }; tab = "sel"; if (e.detail === 2) insertVert(ed, s2w(px, py)); drawAll(); sidebar(); guide(); return; }
     sel = NOSEL(); drawAll(); sidebar();
   }
 });
@@ -256,8 +261,8 @@ function ghostFor(h) {
   const ex = slotAt(h); if (ex) return { replace: ex, edge: h.edge, sec: h.sec, P: slotQuad(h.edge, ex, .08, wallPath(h.edge, h.sec), h.sec), ok: true };
   const f = Math.max(0, Math.min(w.nfl - 1, Math.floor((h.z - w.zmin) / w.fh)));
   const c = Math.round(h.s / .25) * .25; const s = { a0: c - df.w / 2, a1: c + df.w / 2, z0: w.zmin + f * w.fh + df.sill, z1: w.zmin + f * w.fh + df.sill + df.h };
-  const bad = s.a0 < w.amin + .12 || s.a1 > w.amax - .12 || s.z1 > w.zmax - .15 || w.slots.some(o => !o.deleted && Math.min(o.a1, s.a1) - Math.max(o.a0, s.a0) > .05 && Math.min(o.z1, s.z1) - Math.max(o.z0, s.z0) > .05);
-  return { add: { kind, f, a: c, ...(brush[kind] ? { style: brush[kind] } : {}) }, edge: h.edge, sec: h.sec, P: slotQuad(h.edge, s, .08, wallPath(h.edge, h.sec), h.sec), ok: !bad };
+  const why = s.a0 < w.amin + .12 || s.a1 > w.amax - .12 ? "Muy cerca del borde de la pared" : s.z1 > w.zmax - .15 ? "No entra en altura" : w.slots.some(o => !o.deleted && Math.min(o.a1, s.a1) - Math.max(o.a0, s.a0) > .05 && Math.min(o.z1, s.z1) - Math.max(o.z0, s.z0) > .05) ? "Se pisa con otra abertura" : "", bad = !!why;
+  return { add: { kind, f, a: c, ...(brush[kind] ? { style: brush[kind] } : {}) }, edge: h.edge, sec: h.sec, P: slotQuad(h.edge, s, .08, wallPath(h.edge, h.sec), h.sec), ok: !bad, why };
 }
 rc.addEventListener("pointerdown", e => {
   rc.setPointerCapture(e.pointerId); drag3 = { x: e.clientX, y: e.clientY, b: e.button, moved: false, sx: e.clientX, sy: e.clientY };
@@ -268,15 +273,16 @@ rc.addEventListener("pointermove", e => {
     if (slotDrag) { const h = pick3(e); if (h && h.edge === slotDrag.edge && h.sec === slotDrag.sec) { slotDrag.da = Math.round((h.s - slotDrag.s0) / .25) * .25; const s = { ...slotDrag.slot, a0: slotDrag.slot.a0 + slotDrag.da, a1: slotDrag.slot.a1 + slotDrag.da }; setGhost(slotQuad(slotDrag.edge, s, .09, wallPath(slotDrag.edge, slotDrag.sec), slotDrag.sec), 0xffd24e, .35); } return; }
     if (drag3.moved && (drag3.b === 2 || e.shiftKey)) { const k = dist * .0018; tgt.x += (Math.sin(az) * dx - Math.cos(az) * Math.sin(el_) * dy * -1) * k; tgt.y += (-Math.cos(az) * dx - Math.sin(az) * Math.sin(el_) * dy * -1) * k; } else if (drag3.moved && (drag3.b === 0 || drag3.b === 1)) { az -= dx * .008; el_ = Math.min(1.5, Math.max(.03, el_ + dy * .008)); }
     drag3.x = e.clientX; drag3.y = e.clientY; return; }
-  if (["win", "door", "bal", "shop"].includes(tool)) { const g = ghostFor(pick3(e)); if (g) setGhost(g.P, g.replace ? 0x4ea1ff : (g.ok ? 0x4cc38a : 0xef6a5e), g.replace ? .3 : .5); else ghost.visible = false; return; }
-  if (tool === "select") { const s = slotAt(pick3(e)); rc.style.cursor = s ? "pointer" : "default"; }
+  if (["win", "door", "bal", "shop"].includes(tool)) { const g = ghostFor(pick3(e)); if (g) { setGhost(g.P, g.replace ? 0x4ea1ff : (g.ok ? 0x4cc38a : 0xef6a5e), g.replace ? .3 : .5); tip(e, g.replace ? "Reemplazar por: " + KINDS[tool].toLowerCase() : (g.ok ? KINDS[tool] + " · clic para poner" : g.why)); } else { ghost.visible = false; tip(e, ""); } return; }
+  if (tool === "select") { const h = pick3(e), s = slotAt(h); rc.style.cursor = h ? "pointer" : "default"; tip(e, s ? KINDS[s.kind] + " · clic para elegir" : (h ? "Pared " + (h.edge + 1) + (h.sec ? " (tramo superior)" : "") + " · clic para elegir" : "")); }
 });
+rc.addEventListener("pointerleave", () => { $("tip").style.display = "none"; ghost.visible = false; });
 rc.addEventListener("pointerup", e => {
   const d = drag3; drag3 = null; ghost.visible = tool !== "select" ? ghost.visible : false;
   if (slotDrag) { const sd = slotDrag; slotDrag = null; ghost.visible = false; if (sd.da) moveSlot(sd.edge, sd.id, sd.da, sd.sec); return; }
   if (!d || d.moved || d.b !== 0) return;
   const h = pick3(e);
-  if (tool === "select") { if (!h) { sel = NOSEL(); } else { const s = slotAt(h); sel = { edge: h.edge, sec: h.sec, slot: s ? s.id : null, vert: null }; } drawAll(); sidebar(); return; }
+  if (tool === "select") { if (!h) { sel = NOSEL(); } else { const s = slotAt(h); sel = { edge: h.edge, sec: h.sec, slot: s ? s.id : null, vert: null }; tab = "sel"; } drawAll(); guide(); sidebar(); return; }
   if (["win", "door", "bal", "shop"].includes(tool)) { const g = ghostFor(h); if (!g || !g.ok) { if (g) toast("No entra ahí: se pisa con otra abertura o queda muy cerca del borde"); return; } placeFrom(g); }
 });
 rc.addEventListener("contextmenu", e => e.preventDefault());
@@ -288,11 +294,11 @@ function placeFrom(g) {
   const ed = ES(g.edge, g.sec);
   if (g.add) { ed.add.push(g.add); sel = { edge: g.edge, sec: g.sec, slot: "add," + (ed.add.length - 1), vert: null }; }
   else { const s = g.replace, kind = tool; const st = brush[kind] || undefined; if (s.id.startsWith("add,")) { const a = ed.add[+s.id.slice(4)]; if (a) { if (a.kind !== kind) { delete a.w; delete a.h; delete a.sill; } a.kind = kind; if (st) a.style = st; else delete a.style; } } else { const o = ed.ov[s.id] = ed.ov[s.id] || {}; delete o.del; if (o.kind && o.kind !== kind || s.kind !== kind) { delete o.w; delete o.h; delete o.sill; } o.kind = kind; if (st) o.style = st; else delete o.style; } sel = { edge: g.edge, sec: g.sec, slot: s.id, vert: null }; }
-  commit(true);
+  toast((g.add ? KINDS[tool] + " agregada" : KINDS[tool] + ": reemplazada") + " · Ctrl+Z para deshacer", 1800); commit(true);
 }
 function moveSlot(i, id, da, sec = sel.sec || 0) { const ed = ES(i, sec); if (id.startsWith("add,")) { const a = ed.add[+id.slice(4)]; a.a = (a.a ?? 0) + da; } else { const o = ed.ov[id] = ed.ov[id] || {}; o.da = (o.da || 0) + da; } commit(true); }
 function setSlotField(i, id, k, v, sec = sel.sec || 0) { const ed = ES(i, sec); const tgt = id.startsWith("add,") ? ed.add[+id.slice(4)] : (ed.ov[id] = ed.ov[id] || {}); if (v === "" || v == null) delete tgt[k]; else tgt[k] = v; commit(true); }
-function deleteSlot(i, id, sec = sel.sec || 0) { const ed = ES(i, sec); if (id.startsWith("add,")) ed.add.splice(+id.slice(4), 1); else ed.ov[id] = { del: true }; sel.slot = null; commit(true); }
+function deleteSlot(i, id, sec = sel.sec || 0) { const ed = ES(i, sec); if (id.startsWith("add,")) ed.add.splice(+id.slice(4), 1); else ed.ov[id] = { del: true }; sel.slot = null; toast("Abertura borrada · Ctrl+Z para deshacer", 1800); commit(true); }
 function resetSlot(i, id, sec = sel.sec || 0) { const ed = ES(i, sec); if (!id.startsWith("add,")) delete ed.ov[id]; commit(true); }
 function clearWall(i, sec = sel.sec || 0) { const ed = ES(i, sec); ed.add = []; ed.ov = {}; slotsOf(i, sec).forEach(s => { if (!s.id.startsWith("add,")) ed.ov[s.id] = { del: true }; }); sel.slot = null; commit(true); }
 function resetWall(i, sec = sel.sec || 0) { if (sec) Object.assign(ES(i, sec), { ov: {}, add: [] }); else Object.assign(E()[i], { ov: {}, add: [], sx: {}, mat: 0, rot: 0, ws: "", ds: "", bs: "", bulge: 0 }); sel.slot = null; commit(true); }
@@ -329,10 +335,7 @@ function stylePicker(kind, cur, onPick, labelGeneral = "Estilo general") {
   const it = CAT && (CAT[CATKIND[kind]] || []).find(x => x.name === cur);
   return el("button", { class: "pick", onclick: () => openCat(kind, cur, n => { onPick(n); sidebar(); }, "Estilo de " + KINDS[kind].toLowerCase()), html: `${it ? `<img src="${it.thumb}">` : `<img style="opacity:.25">`}<span>${cur || labelGeneral}</span><span style="flex:0">▾</span>` });
 }
-function sidebar() {
-  const sd = $("side"); const keep = sd.scrollTop; sd.innerHTML = "";
-  if (!closed) { sd.append(el("div", { class: "empty", html: "<b>Empezá una planta</b><br>Elegí una forma en «Plantas rápidas» o tocá <b>Planta</b> (D) y dibujá las esquinas con clics." })); return; }
-  // pared / abertura elegida
+function selTab(sd) {
   if (sel.edge != null && E()[sel.edge]) {
     const i = sel.edge, wsec = sel.sec || 0, ed = E()[i], w = Wk(i, wsec);
     const s = sel.slot && w ? w.slots.find(x => x.id === sel.slot) : null;
@@ -353,24 +356,83 @@ function sidebar() {
       el("div", { class: "row" }, el("label", {}, "Balcones de esta pared"), ""), stylePicker("bal", ed.bs, n => { ed.bs = n || ""; commit(true); }),
       el("div", { class: "row" }, el("button", { onclick: () => clearWall(i) }, "Vaciar pared"), el("button", { onclick: () => resetWall(i) }, "Restablecer pared")),
       el("div", { class: "row" }, el("button", { onclick: () => { E().forEach((x, k) => { if (k !== i) { x.mat = ed.mat; x.rot = ed.rot; x.ws = ed.ws; x.ds = ed.ds; x.bs = ed.bs; } }); commit(true); toast("Material y estilos copiados a todas las paredes"); } }, "Copiar material y estilos a todas"))));
+    const wbox = el("div", { class: "sec" }, el("h3", {}, "Solo esta pared"), el("div", { class: "hintline", style: "margin-bottom:6px" }, "Cambian solo esta pared; lo demás sigue las opciones generales.")); compBlocks(wbox, "w", ed); sd.append(wbox);
   } else if (sel.vert != null) {
     sd.append(sec("Esquina", el("div", { class: "hintline" }, "Arrastrala en la planta para moverla. Clic derecho (o Supr) la borra."), el("div", { class: "row" }, el("button", { disabled: S.verts.length <= 3, onclick: () => removeVert(sel.vert) }, "Borrar esquina"))));
-  } else sd.append(sec("Selección", el("div", { class: "hintline" }, "Tocá una pared en la planta o en la vista 3D para editar su material, curva y aberturas.")));
-  // edificio
+  } else {
+    sd.append(sec("Paredes", el("div", { class: "hintline" }, "Elegí una pared (acá, en la planta o en la vista 3D) para cambiar su material, curvarla o poner aberturas."),
+      el("div", { class: "wlist", style: "margin-top:8px" }, ...S.verts.map((_, i) => el("button", { onclick: () => { sel = { edge: i, sec: 0, slot: null, vert: null }; sidebar(); drawAll(); } }, el("span", {}, "Pared " + (i + 1)), el("span", { class: "hintline" }, wallLen(i).toFixed(1) + " m"))))));
+  }
+}
+function bldTab(sd) {
   sd.append(sec("Edificio",
     numRow("Pisos", S.floors, 1, 1, 40, v => { S.floors = Math.round(v); commit(true); }), numRow("Alto de piso", S.floor_h, .1, 2.2, 6, v => { S.floor_h = v; commit(true); }, "m"),
     el("div", { class: "row" }, el("label", {}, "Techo"), el("select", { style: "max-width:170px", onchange: ev => { S.roof = ev.target.value; commit(true); } }, ...(CAT ? CAT.roofs : []).map(r => el("option", { value: r.id, selected: r.id === S.roof }, r.label)))),
     el("div", { class: "row" }, el("label", {}, "Balcones"), el("select", { onchange: ev => { S.props.balconies = ev.target.value; commit(true); } }, ...[["none", "Sin balcones"], ["alternate", "Alternados"], ["all", "En todas"], ["random", "Al azar"]].map(([k, n]) => el("option", { value: k, selected: S.props.balconies === k }, n)))),
     el("div", { class: "row" }, el("label", {}, "Cornisas entre pisos"), el("input", { type: "checkbox", checked: !!S.props.string_courses, onchange: ev => { S.props.string_courses = ev.target.checked; commit(true); } }))));
-  sd.append(setbackSec());
+  sd.append(sec("Planta", el("div", { class: "row" }, el("label", {}, "Imán de la grilla"), el("select", { onchange: ev => { snapG = +ev.target.value; } }, ...[[.25, "25 cm"], [.5, "50 cm"], [1, "1 m"], [2, "2 m"], [8, "8 m (celda)"]].map(([v, n]) => el("option", { value: v, selected: v === snapG }, n)))),
+    el("div", { class: "hintline" }, "Doble clic sobre una pared en la planta agrega una esquina. Clic derecho sobre una esquina la borra.")));
+}
+function styTab(sd) {
   sd.append(sec("Estilos generales", el("div", { class: "hintline" }, "Valen para todas las paredes que no tengan uno propio."),
     el("div", { class: "row" }, el("label", {}, "Ventanas")), stylePicker("win", S.props.window_style, n => { S.props.window_style = n || "NONE"; if (!n) delete S.props.window_style; commit(true); }, "Predeterminado"),
     el("div", { class: "row" }, el("label", {}, "Puertas")), stylePicker("door", S.props.door_style, n => { S.props.door_style = n || "NONE"; if (!n) delete S.props.door_style; commit(true); }, "Predeterminado"),
     el("div", { class: "row" }, el("label", {}, "Balcones")), stylePicker("bal", S.props.balcony_style, n => { S.props.balcony_style = n || "NONE"; if (!n) delete S.props.balcony_style; commit(true); }, "Predeterminado")));
   const colRow = (label, k) => { const i = el("input", { type: "color", value: toHex(colorOf(k)), style: "width:44px;height:26px;padding:0;border:1px solid var(--ln);border-radius:5px;background:none" }); i.onchange = () => { S.props[k] = fromHex(i.value); commit(true); }; return el("div", { class: "row" }, el("label", {}, label), i, el("button", { class: "ghost", title: "Volver al color original", onclick: () => { delete S.props[k]; commit(true); } }, "↺")); };
   sd.append(sec("Colores", colRow("Fachada (A)", "facade_color"), colRow("Material B", "mat_b_color"), colRow("Material C", "mat_c_color"), colRow("Material D", "mat_d_color"), colRow("Molduras", "trim_color"), colRow("Techo", "roof_color"), colRow("Puertas", "door_color")));
-  sd.append(sec("Planta", el("div", { class: "row" }, el("label", {}, "Imán de la grilla"), el("select", { onchange: ev => { snapG = +ev.target.value; } }, ...[[.25, "25 cm"], [.5, "50 cm"], [1, "1 m"], [2, "2 m"], [8, "8 m (celda)"]].map(([v, n]) => el("option", { value: v, selected: v === snapG }, n)))),
-    el("div", { class: "hintline" }, "Doble clic sobre una pared en la planta agrega una esquina. Clic derecho sobre una esquina la borra.")));
+}
+// ---- opciones del add-on (generadas desde sus propios cuadros de componentes)
+const openComp = new Set(["gwindow", "wwindow"]); let optQ = "";
+function fctl(f, val, set) {
+  if (f.type === "BOOLEAN") { const c = el("input", { type: "checkbox", checked: !!val }); c.onchange = () => set(c.checked); return c; }
+  if (f.type === "ENUM") { const s = el("select", { style: "max-width:170px" }, ...(f.items || []).map(([id, n]) => el("option", { value: id, selected: String(id) === String(val) }, n))); s.onchange = () => set(s.value); return s; }
+  if (f.type === "COLOR") { const c = el("input", { type: "color", value: toHex(val || [1, 1, 1]), style: "width:44px;height:26px;padding:0;border:1px solid var(--ln);border-radius:5px;background:none" }); c.onchange = () => set(fromHex(c.value)); return c; }
+  const rng = (f.smax ?? 10) - (f.smin ?? 0), step = f.type === "INT" ? 1 : rng <= 2 ? .05 : rng <= 20 ? .1 : .5;
+  const i = el("input", { type: "number", value: +(+val).toFixed(3), step, min: f.min, max: f.max, style: "width:76px" });
+  i.onchange = () => { let v = parseFloat(i.value); if (isNaN(v)) return; v = Math.max(f.min ?? -1e9, Math.min(f.max ?? 1e9, v)); set(f.type === "INT" ? Math.round(v) : v); };
+  return i;
+}
+function fieldRow(f, mode, ed) {
+  const isW = mode === "w";
+  const cur = isW ? (ed.wp && ed.wp[f.w] !== undefined ? ed.wp[f.w] : (f.g && S.props[f.g] !== undefined ? S.props[f.g] : f.default)) : (f.g === "r_preset" ? S.roof : (S.props[f.g] !== undefined ? S.props[f.g] : f.default));
+  const set = v => { if (isW) { (ed.wp = ed.wp || {})[f.w] = v; } else if (f.g === "r_preset") { S.roof = v; Object.keys(S.props).filter(k => k.startsWith("r_")).forEach(k => delete S.props[k]); } else S.props[f.g] = v; commit(true); };
+  const changedFlag = isW ? (ed.wp && ed.wp[f.w] !== undefined) : (f.g === "r_preset" ? false : S.props[f.g] !== undefined);
+  const lab = el("label", { title: f.desc || f.label, style: changedFlag ? "color:var(--tx)" : "" }, f.label + (f.unit === "LENGTH" ? " (m)" : ""));
+  const row = el("div", { class: "row" }, lab, fctl(f, cur, set));
+  if (changedFlag) row.append(el("button", { class: "ghost", title: "Volver al valor general", onclick: () => { if (isW) { delete ed.wp[f.w]; if (!Object.keys(ed.wp).length) delete ed.wp; } else delete S.props[f.g]; commit(true); } }, "↺"));
+  return row;
+}
+function compBlocks(sd, mode, ed) {
+  if (!SCH) return;
+  const q = optQ.trim().toLowerCase(); const hidden = new Set((R && R.hidden) || []);
+  for (const c of SCH.comps) {
+    if (mode === "w" && !c.wall) continue; if (mode === "g" && c.only_all === undefined) { }
+    const groups = c.groups.map(g => ({ title: g.title, fields: g.fields.filter(f => (mode === "w" ? f.w : f.g) && (mode === "w" || !hidden.has(f.g)) && (!q || (f.label + " " + g.title + " " + c.label).toLowerCase().includes(q))) })).filter(g => g.fields.length);
+    if (!groups.length) continue;
+    const key = mode + c.key; const det = el("details", { class: "comp" }, el("summary", { title: c.desc }, c.label));
+    if (q || openComp.has(key)) det.open = true; det.ontoggle = () => { if (det.open) openComp.add(key); else openComp.delete(key); };
+    groups.forEach(g => { det.append(el("div", { class: "gtitle" }, g.title)); g.fields.forEach(f => det.append(fieldRow(f, mode, ed))); });
+    if (mode === "w" && ed.wp) { const mine = c.groups.flatMap(g => g.fields).filter(f => f.w && ed.wp[f.w] !== undefined); if (mine.length) det.append(el("div", { class: "row" }, el("button", { onclick: () => { mine.forEach(f => delete ed.wp[f.w]); if (!Object.keys(ed.wp).length) delete ed.wp; commit(true); } }, "Volver a lo general"))); }
+    sd.append(det);
+  }
+}
+function optTab(sd) {
+  const q = el("input", { type: "text", placeholder: "Buscar una opción…", value: optQ, style: "width:100%" }); q.oninput = () => { optQ = q.value; const pos = q.selectionStart; sidebar(); const n = $("side").querySelector("input[type=text]"); if (n) { n.focus(); n.setSelectionRange(pos, pos); } };
+  sd.append(el("div", { class: "sec" }, q, el("div", { class: "hintline", style: "margin-top:6px" }, "Son las mismas opciones del add-on de Blender. Valen para todo el edificio; para una pared sola, elegila y mirá «Solo esta pared».")));
+  const box = el("div", { class: "sec" }); sd.append(box); compBlocks(box, "g");
+  if (!SCH) box.append(el("div", { class: "hintline" }, "Esperando al motor…"));
+}
+function sbTab(sd) {
+  sd.append(setbackSec());
+}
+function sidebar() {
+  const sd = $("side"); const keep = sd.scrollTop; sd.innerHTML = "";
+  if (!closed) { sd.append(el("div", { class: "empty", html: "<b>Todavía no hay edificio</b><br>Elegí una forma en el centro de la pantalla o dibujá tu planta." })); return; }
+  const hasSel = sel.edge != null || sel.vert != null;
+  const tabs = [["sel", hasSel ? "Selección" : "Paredes"], ["bld", "Edificio"], ["sty", "Estilo"], ["opt", "Opciones"], ["sb", "Retranqueo"]];
+  sd.append(el("div", { class: "tabs" }, ...tabs.map(([k, n]) => el("button", { class: tab === k ? "on" : "", onclick: () => { tab = k; sidebar(); guide(); } }, n))));
+  const body = el("div"); sd.append(body);
+  ({ sel: selTab, bld: bldTab, sty: styTab, opt: optTab, sb: sbTab })[tab](body);
   sd.scrollTop = keep;
 }
 
@@ -383,7 +445,22 @@ function loadPreset(k) {
   else { const b = PRE[k]; const cx = b.reduce((a, p) => a + p[0], 0) / b.length, cy = b.reduce((a, p) => a + p[1], 0) / b.length; S.verts = b.map(p => [Math.round(p[0] - cx), Math.round(p[1] - cy)]); S.edges = S.verts.map(newEdge); }
   S.setbacks = []; closed = true; sel = NOSEL(); tool = "select"; R = null; ensureCCW(); fitView(); drawTools(); commit(true);
 }
-$("preset").onchange = e => { if (e.target.value) loadPreset(e.target.value); e.target.value = ""; };
+// ---- pantalla de inicio, «Nuevo», ayuda y vistas
+const SHAPEICON = { box: PRE.box, L: PRE.L, U: PRE.U, T: PRE.T };
+function shapeSvg(b) { const xs = b.map(p => p[0]), ys = b.map(p => p[1]); const x0 = Math.min(...xs), y0 = Math.min(...ys), w = Math.max(...xs) - x0, h = Math.max(...ys) - y0, s = Math.min(100 / w, 60 / h); return `<svg viewBox="0 0 100 70"><polygon points="${b.map(p => ((p[0] - x0) * s + (100 - w * s) / 2).toFixed(1) + "," + (65 - (p[1] - y0) * s - (60 - h * s) / 2 + 0).toFixed(1)).join(" ")}"/></svg>`; }
+function welcome() {
+  const w = $("welcome"); const show = !closed && S.verts.length === 0 && tool !== "draw"; w.classList.toggle("show", show); if (!show) return; w.innerHTML = "";
+  const card = (svg, name, fn) => el("div", { class: "shape", onclick: fn, html: svg + `<div>${name}</div>` });
+  w.append(el("div", { class: "card2" }, el("h1", {}, "¿Cómo querés empezar?"), el("p", {}, "Elegí una planta de partida o dibujá la tuya. Después podés mover esquinas, curvar paredes y agregar ventanas y puertas con el mouse."),
+    el("div", { class: "shapes" }, card(shapeSvg(PRE.box), "Rectángulo", () => loadPreset("box")), card(shapeSvg(PRE.L), "En L", () => loadPreset("L")), card(shapeSvg(PRE.U), "En U", () => loadPreset("U")), card(shapeSvg(PRE.T), "En T", () => loadPreset("T")),
+      card('<svg viewBox="0 0 100 70"><circle cx="50" cy="35" r="28"/></svg>', "Torre redonda", () => loadPreset("round")), card('<svg viewBox="0 0 100 70"><path d="M12 8h50a24 27 0 0 1 0 54H12z"/></svg>', "Frente curvo", () => loadPreset("curve")),
+      card('<svg viewBox="0 0 100 70"><path d="M15 55l15-40 40 5 15 35z" stroke-dasharray="6 5"/></svg>', "Dibujar la mía", () => { setTool("draw"); w.classList.remove("show"); }), card('<svg viewBox="0 0 100 70"><path d="M50 12v34M34 32l16 16 16-16M18 58h64"/></svg>', "Abrir archivo", () => $("file").click())),
+    el("div", { class: "steps", html: "<span><b>1</b> Planta</span><span><b>2</b> Paredes</span><span><b>3</b> Ventanas y puertas</span><span><b>4</b> Techo y color</span><span><b>5</b> Exportar</span>" })));
+}
+$("bNew").onclick = () => { if (!closed && !S.verts.length) return; const m = $("mbox"); m.innerHTML = ""; m.append(el("h2", {}, "¿Empezar un edificio nuevo?"), el("div", { class: "hintline" }, "Se borra lo que hay en pantalla. Podés volver con Ctrl+Z, o guardalo antes con «Guardar»."), el("div", { class: "row", style: "justify-content:flex-end;margin-top:14px" }, el("button", { onclick: () => $("modal").classList.remove("show") }, "Cancelar"), el("button", { class: "pri", onclick: () => { $("modal").classList.remove("show"); S.verts = []; S.edges = []; S.setbacks = []; closed = false; R = null; sel = NOSEL(); tool = "select"; tab = "sel"; showReal(); commit(false); drawTools(); guide(); } }, "Sí, nuevo"))); $("modal").classList.add("show"); };
+$("bHelp").onclick = helpModal;
+function helpModal() { const m = $("mbox"); m.innerHTML = ""; const rows = [["V", "Elegir paredes y aberturas"], ["D", "Editar / dibujar la planta"], ["W · P · B · T", "Colocar ventana · puerta · balcón · vidriera"], ["Supr", "Borrar la abertura o esquina elegida"], ["Ctrl+Z · Ctrl+Y", "Deshacer · rehacer"], ["Esc", "Cancelar / volver a Elegir"], ["Arrastrar (3D)", "Girar la vista"], ["Rueda", "Acercar o alejar"], ["Clic derecho + arrastrar", "Mover la vista"], ["Doble clic (3D)", "Centrar la vista en ese punto"], ["Clic derecho (planta)", "Borrar una esquina"]]; m.append(el("h2", {}, "Atajos y ayuda"), el("table", { class: "kt" }, ...rows.map(r => el("tr", {}, el("td", {}, el("span", { class: "kbd" }, r[0])), el("td", {}, r[1])))), el("div", { class: "row", style: "justify-content:flex-end;margin-top:14px" }, el("button", { class: "pri", onclick: () => $("modal").classList.remove("show") }, "Entendido"))); $("modal").classList.add("show"); }
+document.querySelectorAll("#vnav button").forEach(b => b.onclick = () => { if (b.dataset.az === "top") { el_ = 1.5; } else { az = +b.dataset.az; el_ = .35; } });
 $("bUndo").onclick = undo; $("bRedo").onclick = redo;
 $("bSave").onclick = () => { const a = el("a", { href: URL.createObjectURL(new Blob([snap()], { type: "application/json" })), download: "edificio.cs2ed.json" }); a.click(); toast("Guardado en tus descargas"); };
 $("bOpen").onclick = () => $("file").click();
@@ -411,6 +488,7 @@ addEventListener("keydown", e => {
   if (k === "escape") { if (!closed && S.verts.length) { S.verts = []; S.edges = []; drawAll(); hintText(); } else if (tool !== "select") setTool("select"); else { sel = NOSEL(); drawAll(); sidebar(); } return; }
   if (k === "enter" && tool === "draw" && !closed) { closePoly(); return; }
   if (k === "delete" || k === "backspace") { if (sel.edge != null && sel.slot) deleteSlot(sel.edge, sel.slot); else if (sel.vert != null && S.verts.length > 3) removeVert(sel.vert); return; }
+  if (e.key === "?") { helpModal(); return; }
   const m = { v: "select", d: "draw", w: "win", p: "door", b: "bal", t: "shop" }[k]; if (m && !e.ctrlKey && !e.metaKey) setTool(m);
 });
 
@@ -423,7 +501,7 @@ addEventListener("resize", drawPlan);
 window.__ed = { get builds() { return builds; }, w2s, s2w, get view() { return view; }, project: (x, y, z) => { const v = new T.Vector3(x, y, z).project(cam), r = rc.getBoundingClientRect(); return [r.left + (v.x + 1) / 2 * r.width, r.top + (1 - v.y) / 2 * r.height]; }, atS, wallPath, get S() { return S; }, get R() { return R; }, get closed() { return closed; }, get sel() { return sel; }, get tool() { return tool; }, loadPreset, setTool, doBuild, cam, tgt, get ghostVisible() { return ghost.visible; }, setView: (a, e, d) => { az = a; el_ = e; dist = d; }, setSel: s => { sel = s; drawAll(); sidebar(); }, pick3, slotAt, ghostFor };
 (async () => {
   try { const s = localStorage.getItem("cs2ed"); if (s) { restore(s); } } catch { }
-  hist.u.push(snap()); drawTools(); await loadCatalog(); hintText(); stats(); sidebar();
+  hist.u.push(snap()); drawTools(); await loadCatalog(); hintText(); stats(); sidebar(); welcome(); guide();
   if (closed) { fitView(); showReal(); requestBuild(); }
   setTimeout(drawPlan, 50); requestAnimationFrame(loop);
 })();

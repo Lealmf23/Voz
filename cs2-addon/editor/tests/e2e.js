@@ -58,7 +58,7 @@ const ok = (c, m) => { console.log((c ? 'OK   ' : 'FALLA') + ' ' + m); if (!c) f
 
   // 5) retranqueo: agregar uno desde el panel y editar una ventana del tramo superior
   await ed(() => __ed.loadPreset('box')); await waitR();
-  await p.click('text=+ Agregar retranqueo'); await waitR();
+  await p.click('#side .tabs >> text=Retranqueo'); await p.click('text=+ Agregar retranqueo'); await waitR();
   ok(await ed(() => __ed.R.levels.length === 2 && __ed.R.walls.some(w => w.sec === 1)), 'el retranqueo crea un tramo superior con sus paredes');
   await ed(() => __ed.setView(-1.2, .5, 60)); await p.waitForTimeout(300);
   const up = await ed(() => { const w = __ed.R.walls.find(w => w.sec === 1 && w.edge === 0); const sl = w.slots.find(s => !s.deleted && s.kind === 'win'); const q = __ed.atS(0, (sl.a0 + sl.a1) / 2, __ed.wallPath(0, 1), 1); return { x: q.x - __ed.R.center[0], y: q.y - __ed.R.center[1], z: (sl.z0 + sl.z1) / 2, id: sl.id }; });
@@ -70,9 +70,17 @@ const ok = (c, m) => { console.log((c ? 'OK   ' : 'FALLA') + ' ' + m); if (!c) f
   ok(await cu() === u0 - 1, 'se puede borrar una ventana del tramo superior');
   await p.screenshot({ path: out + '/e2e_setback.png' });
 
-  // 6) exportar (con el retranqueo)
+  // 6) opciones del add-on: una general y una solo de la pared elegida
+  await p.click('#side .tabs >> text=Opciones');
+  const inp2 = p.locator('#side details input[type=number]').first(); await inp2.fill('2.2'); await inp2.dispatchEvent('change'); await waitR();
+  ok(await ed(() => Object.values(__ed.S.props).includes(2.2)), 'una opción general del add-on se guarda en la receta');
+  await ed(() => __ed.setSel({ edge: 0, sec: 0, slot: null, vert: null })); await p.click('#side .tabs >> text=Selección');
+  const inp3 = p.locator('#side .sec:has-text("Solo esta pared") details input[type=number]').first(); await inp3.fill('3'); await inp3.dispatchEvent('change'); await waitR();
+  ok(await ed(() => __ed.S.edges[0].wp && Object.values(__ed.S.edges[0].wp).includes(3)), 'una opción propia de la pared se guarda en esa pared');
+
+  // 7) exportar (con el retranqueo)
   const dir = '/tmp/cs2_e2e_' + Date.now();
-  const r = await p.evaluate(async d => { const rec = { ...JSON.parse(JSON.stringify({ verts: __ed.S.verts, edges: __ed.S.edges, floors: __ed.S.floors, floor_h: __ed.S.floor_h, roof: __ed.S.roof, props: __ed.S.props })), out: d, name: 'E2E' }; return await (await fetch('/export', { method: 'POST', body: JSON.stringify(rec) })).json(); }, dir);
+  const r = await p.evaluate(async d => { const rec = { ...JSON.parse(JSON.stringify({ verts: __ed.S.verts, edges: __ed.S.edges, props: __ed.S.props, floors: __ed.S.floors, floor_h: __ed.S.floor_h, roof: __ed.S.roof, props: __ed.S.props })), out: d, name: 'E2E' }; return await (await fetch('/export', { method: 'POST', body: JSON.stringify(rec) })).json(); }, dir);
   ok(!r.error && r.tris && r.tris[2] <= 500, 'exportación OK, triángulos ' + JSON.stringify(r.tris) + (r.error ? ' ' + r.error.slice(0, 200) : ''));
   ok(errs.length === 0, 'sin errores en la consola del navegador' + (errs.length ? ': ' + errs.slice(0, 3).join(' | ') : ''));
   await b.close(); process.exit(fails ? 1 : 0);

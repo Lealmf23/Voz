@@ -189,6 +189,143 @@ def level_of(levels, z):
     return next((k for k, lv in enumerate(levels) if z <= lv["z1"] + 1e-3), len(levels) - 1)
 
 
+
+_SCHEMA = {}
+
+
+def _fdesc(p):
+    d = dict(id=p.identifier, label=p.name, desc=p.description, type=p.type)
+    try:
+        if p.type == "ENUM":
+            d["items"] = [[i.identifier, i.name] for i in p.enum_items]
+            d["default"] = p.default
+        elif p.type in ("INT", "FLOAT"):
+            if p.type == "FLOAT" and p.subtype in ("COLOR", "COLOR_GAMMA"):
+                d["type"] = "COLOR"
+                d["default"] = list(p.default_array)
+            else:
+                d.update(min=p.hard_min, max=p.hard_max, smin=p.soft_min, smax=p.soft_max, default=p.default, unit=p.unit)
+        elif p.type == "BOOLEAN":
+            d["default"] = p.default
+    except Exception:
+        d["items"] = d.get("items") or []
+    return d
+
+
+def schema():
+    """Opciones del add-on tal como las muestran sus cuadros de componentes: por componente, grupos de campos con propiedad del edificio (g)
+    y/o de la pared (w), con tipo, límites, opciones y valor por defecto."""
+    if _SCHEMA:
+        return _SCHEMA
+    if not hasattr(bpy.types.Scene, "cs2_building"):
+        a.register()
+    gp = {p.identifier: p for p in a.CS2BuildingProps.bl_rna.properties}
+    wp = {p.identifier: p for p in a.CS2WallProps.bl_rna.properties}
+    comps, w2g, wmodes = [], {}, {}
+    for c in a._componentes():
+        groups = []
+        for title, fields, _cond in c["groups"]:
+            fl = []
+            for f in fields:
+                g, w = f.get("g"), f.get("w")
+                if c["key"] == "roof":
+                    w = None            # los ajustes de techo por cara no se editan acá
+                if g not in gp:
+                    g = None
+                if w not in wp:
+                    w = None
+                if not g and not w:
+                    continue
+                d = _fdesc(gp[g] if g else wp[w])
+                d["g"], d["w"] = g, w
+                if g and w:
+                    w2g[w] = g
+                fl.append(d)
+            if fl:
+                groups.append(dict(title=title, fields=fl))
+        for attr, prop in (c.get("wall_modes") or []):
+            wmodes[prop] = attr
+        comps.append(dict(key=c["key"], label=c["label"], desc=c.get("desc", ""), groups=groups, wall=any(f["w"] for g in groups for f in g["fields"]),
+                          only_all=bool(c.get("only_all"))))
+    _SCHEMA.update(comps=comps, w2g=w2g, wmodes=wmodes)
+    return _SCHEMA
+
+
+def _wall_attr_maps():
+    ints, floats, grp = {}, {}, {}
+    for gname, g in a.WALL_GROUPS.items():
+        for prop, attr in g["ints"].items():
+            ints[prop] = attr
+            grp[prop] = gname
+        for prop, attr in g["floats"].items():
+            floats[prop] = attr
+            grp[prop] = gname
+    return ints, floats, grp
+
+
+def _setprop(s, k, v):
+    """Escribe una propiedad del edificio con el tipo que espera Blender."""
+    p = a.CS2BuildingProps.bl_rna.properties[k]
+    if p.type == "ENUM":
+        v = str(v)
+    elif p.type == "INT":
+        v = int(v)
+    elif p.type == "FLOAT" and p.array_length:
+        v = tuple(float(x) for x in v)
+    elif p.type == "FLOAT":
+        v = float(v)
+    elif p.type == "BOOLEAN":
+        v = bool(v)
+    setattr(s, k, v)
+
+
+def apply_wall_props(f, lays, wpd, s):
+    """Pone en una cara (pared) los ajustes propios `wpd` {propiedad de pared: valor}; el resto de su grupo toma el valor general."""
+    sc = schema()
+    ints, floats, grp = _wall_attr_maps()
+    groups = set()
+    for prop, v in wpd.items():
+        if prop in sc["wmodes"]:
+            f[lays[sc["wmodes"][prop]]] = int(v)
+        elif prop in ("win_auto", "win_count"):
+            groups.add("win")
+        elif prop in grp:
+            groups.add(grp[prop])
+    for gname in groups:
+        g = a.WALL_GROUPS[gname]
+        f[lays["cs2_flags"]] = f[lays["cs2_flags"]] | g["flag"]
+        for prop, attr in list(g["ints"].items()) + list(g["floats"].items()):
+            if prop in wpd:
+                v = wpd[prop]
+            elif prop in sc["w2g"] and hasattr(s, sc["w2g"][prop]):
+                v = getattr(s, sc["w2g"][prop])
+            else:
+                v = a.CS2WallProps.bl_rna.properties[prop].default
+            f[lays[attr]] = int(v) if attr in ints.values() and prop in ints else float(v)
+        if gname == "win":
+            auto = wpd.get("win_auto", True)
+            cnt = int(wpd.get("win_count", 0))
+            f[lays["cs2_w_count"]] = 0 if auto else (cnt if cnt > 0 else -1)
+        if gname == "bal" and not int(f[lays["cs2_bal_mode"]]):
+            f[lays["cs2_bal_mode"]] = 2
+
+
+def hidden_props(s):
+    """Propiedades del edificio que el add-on esconde hoy (su condición `vis` da falso)."""
+    out = []
+    for c in a._componentes():
+        for _t, fields, _c in c["groups"]:
+            for f in fields:
+                vis = f.get("vis")
+                if vis and f.get("g"):
+                    try:
+                        if not vis(s):
+                            out.append(f["g"])
+                    except Exception:
+                        pass
+    return out
+
+
 def prepare(rec):
     """Arma la forma con los ajustes por pared y las ediciones de ranuras. Devuelve (s, obj, info) sin generar el edificio."""
     if not hasattr(bpy.types.Scene, "cs2_building"):
@@ -207,11 +344,15 @@ def prepare(rec):
     floors, fh = int(rec.get("floors", 3)), float(rec.get("floor_h", 3.0))
     s.building_name = rec.get("name") or "Edificio01"
     s.floors, s.floor_height = floors, fh
-    for k, v in (rec.get("props") or {}).items():
-        if k in GLOBAL_PROPS:
-            setattr(s, k, v)
     if rec.get("roof"):
-        s.r_preset = rec["roof"]
+        s.r_preset = rec["roof"]            # primero el modelo de techo: él pone sus valores y después se aplican los cambios sueltos
+    ok = GLOBAL_PROPS | {f["g"] for c in schema()["comps"] for g in c["groups"] for f in g["fields"] if f["g"]}
+    for k, v in (rec.get("props") or {}).items():
+        if k in ok and k != "r_preset":
+            try:
+                _setprop(s, k, v)
+            except Exception as ex:
+                print("propiedad ignorada", k, v, ex)
     pts, owner, facets = expand(verts, edges)
     levels = make_levels(pts, owner, facets, len(verts), floors, fh, rec.get("setbacks"))
     if len(levels) == 1:
@@ -233,6 +374,8 @@ def prepare(rec):
             f[lays["cs2_f_mat"]] = int(e["mat"])
         if e.get("rot"):
             f[lays["cs2_f_rot"]] = int(e["rot"])
+        if e.get("wp"):
+            apply_wall_props(f, lays, e["wp"], s)
         for key, attr in (("ws", "cs2_w_style"), ("ds", "cs2_d_style"), ("bs", "cs2_b_style")):
             if e.get(key):
                 f[lays[attr]] = a.STYLE_ID_NONE if e[key] == "__NONE__" else a.style_id(e[key])
@@ -328,6 +471,7 @@ def build(rec):
         walls.append(dict(edge=ei, sec=sec, key=lay["key"], amin=lay["amin"], amax=lay["amax"], zmin=lay["zmin"], zmax=lay["zmax"], fh=d["fh"], nfl=lay["nfl"],
                           defaults=d, slots=slots, facets=[[list(q0), list(q1)] for q0, q1 in info["levels"][sec]["facets"][ei]]))
     out["walls"] = walls
+    out["hidden"] = hidden_props(s)
     out["levels"] = [dict(z0=lv["z0"], z1=lv["z1"], poly=[list(q) for q in lv["P"]]) for lv in info["levels"]]
     return out
 
@@ -398,6 +542,8 @@ class H(http.server.BaseHTTPRequestHandler):
 
     def do_GET(self):
         p = self.path.split("?")[0]
+        if p == "/schema":
+            return self._send(200, json.dumps(run_in_main(lambda _r: schema(), None)))
         if p == "/catalog":
             return self._send(200, json.dumps(run_in_main(lambda _r: catalog(), None)))
         if p == "/":
