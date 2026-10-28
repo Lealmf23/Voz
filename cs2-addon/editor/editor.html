@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Editor de edificios CS2</title>
+<style>
+:root{--bg:#1c1f24;--pn:#262a31;--tx:#e8eaed;--mu:#9aa0a6;--ac:#4ea1ff;--ln:#3a3f47}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--tx);font:14px system-ui,sans-serif;display:flex;height:100vh}
+#side{width:270px;background:var(--pn);padding:12px;display:flex;flex-direction:column;gap:10px;overflow:auto;border-right:1px solid var(--ln)}
+h1{font-size:15px;margin:0}h2{font-size:12px;margin:6px 0 0;color:var(--mu);text-transform:uppercase;letter-spacing:.05em}
+button{background:#333a44;color:var(--tx);border:1px solid var(--ln);border-radius:6px;padding:7px 10px;cursor:pointer;font:inherit}
+button.on,button.pri{background:var(--ac);border-color:var(--ac);color:#04121f}button:disabled{opacity:.5}
+label{display:flex;justify-content:space-between;align-items:center;gap:8px}input[type=number]{width:70px;background:#15181c;color:var(--tx);border:1px solid var(--ln);border-radius:4px;padding:4px}
+.row{display:flex;gap:6px;flex-wrap:wrap}.hint{color:var(--mu);font-size:12px;line-height:1.4}
+#views{flex:1;display:grid;grid-template-columns:1fr 1fr;min-width:0}
+#views canvas{width:100%;height:100%;display:block}#plan{border-right:1px solid var(--ln);cursor:crosshair;background:#15181c}
+#stat{font-size:12px;color:var(--mu)}
+</style></head><body>
+<div id="side">
+ <h1>Editor de edificios CS2</h1>
+ <div class="hint" id="help">Dibujá la planta: clic para poner esquinas, clic en la primera para cerrar. Se pega a la grilla.</div>
+ <h2>Planta</h2>
+ <div class="row"><button id="bBox">Caja</button><button id="bL">L</button><button id="bU">U</button><button id="bClear">Borrar</button></div>
+ <label>Grilla (m)<input id="snap" type="number" value="1" min="0.25" step="0.25"></label>
+ <h2>Edificio</h2>
+ <label>Pisos<input id="floors" type="number" value="4" min="1" max="30"></label>
+ <label>Alto de piso (m)<input id="fh" type="number" value="3" min="2" step="0.1"></label>
+ <button class="pri" id="bBuild" disabled>Crear malla real (Blender)</button>
+ <div id="stat">Motor: sin comprobar</div>
+ <div class="hint">Izquierda: planta (cuadrícula = 8 m, el tamaño de celda de CS2). Derecha: vista 3D (arrastrar = girar, rueda = zoom, clic derecho = mover).</div>
+</div>
+<div id="views"><canvas id="plan"></canvas><canvas id="v3"></canvas></div>
+<script type="importmap">{"imports":{"three":"./vendor/three.module.min.js"}}</script>
+<script type="module">
+import * as T from "three";
+const $=id=>document.getElementById(id);
+let pts=[], closed=false, hover=null, real=null;
+// ---------- planta 2D ----------
+const pc=$("plan"), pg=pc.getContext("2d"); const view={cx:0,cy:0,s:12}; // px por metro
+const w2s=(x,y)=>[pc.width/2+(x-view.cx)*view.s, pc.height/2-(y-view.cy)*view.s];
+const s2w=(px,py)=>[(px-pc.width/2)/view.s+view.cx,(pc.height/2-py)/view.s+view.cy];
+const snapv=v=>{const g=+$("snap").value||1;return Math.round(v/g)*g};
+function drawPlan(){
+  const r=pc.getBoundingClientRect(); if(pc.width!==r.width|0||pc.height!==r.height|0){pc.width=r.width|0;pc.height=r.height|0}
+  pg.clearRect(0,0,pc.width,pc.height);
+  const [x0,y0]=s2w(0,pc.height),[x1,y1]=s2w(pc.width,0);
+  for(const [step,col] of [[1,"#20242a"],[8,"#3a4452"]]){
+    pg.strokeStyle=col;pg.lineWidth=step==8?1.2:1;pg.beginPath();
+    for(let x=Math.floor(x0/step)*step;x<=x1;x+=step){const [a]=w2s(x,0);pg.moveTo(a,0);pg.lineTo(a,pc.height)}
+    for(let y=Math.floor(y0/step)*step;y<=y1;y+=step){const [,b]=w2s(0,y);pg.moveTo(0,b);pg.lineTo(pc.width,b)}
+    pg.stroke();
+  }
+  const P=hover&&!closed?[...pts,hover]:pts; if(!P.length)return;
+  pg.beginPath();P.forEach((p,i)=>{const [a,b]=w2s(...p);i?pg.lineTo(a,b):pg.moveTo(a,b)});
+  if(closed)pg.closePath();pg.fillStyle="rgba(78,161,255,.18)";if(closed)pg.fill();
+  pg.strokeStyle="#4ea1ff";pg.lineWidth=2;pg.stroke();
+  pts.forEach((p,i)=>{const [a,b]=w2s(...p);pg.fillStyle=i==0&&!closed?"#ffd24e":"#fff";pg.beginPath();pg.arc(a,b,4,0,7);pg.fill()});
+  if(hover&&pts.length&&!closed){const q=pts[pts.length-1];const d=Math.hypot(hover[0]-q[0],hover[1]-q[1]);const [a,b]=w2s((hover[0]+q[0])/2,(hover[1]+q[1])/2);pg.fillStyle="#fff";pg.fillText(d.toFixed(1)+" m",a+6,b-6)}
+}
+pc.addEventListener("pointermove",e=>{const r=pc.getBoundingClientRect();const w=s2w(e.clientX-r.left,e.clientY-r.top);hover=[snapv(w[0]),snapv(w[1])];drawPlan()});
+pc.addEventListener("click",e=>{
+  if(closed||!hover)return;
+  if(pts.length>=3&&hover[0]==pts[0][0]&&hover[1]==pts[0][1]){closed=true;changed();return}
+  if(pts.length&&hover[0]==pts[pts.length-1][0]&&hover[1]==pts[pts.length-1][1])return;
+  pts.push(hover);changed();
+});
+pc.addEventListener("wheel",e=>{e.preventDefault();view.s=Math.min(60,Math.max(3,view.s*(e.deltaY<0?1.1:.9)));drawPlan()},{passive:false});
+const shapes={bBox:[[0,0],[20,0],[20,12],[0,12]],bL:[[0,0],[24,0],[24,10],[10,10],[10,18],[0,18]],bU:[[0,0],[28,0],[28,16],[20,16],[20,8],[8,8],[8,16],[0,16]]};
+for(const k in shapes)$(k).onclick=()=>{pts=shapes[k].map(p=>[p[0]-10,p[1]-8]);closed=true;changed()};
+$("bClear").onclick=()=>{pts=[];closed=false;real=null;changed()};
+// ---------- 3D ----------
+const rc=$("v3"), R=new T.WebGLRenderer({canvas:rc,antialias:true}); R.setPixelRatio(1);
+const sc=new T.Scene(); sc.background=new T.Color(0x20242a);
+const cam=new T.PerspectiveCamera(45,1,.1,2000); let az=.8,el=.6,dist=60,tgt=new T.Vector3(0,0,6);
+sc.add(new T.HemisphereLight(0xffffff,0x445566,1.1)); const sun=new T.DirectionalLight(0xffffff,1.6);sun.position.set(30,-20,50);sc.add(sun);
+const gr=new T.GridHelper(160,20,0x4a5566,0x2c323b);gr.rotation.x=Math.PI/2;sc.add(gr);
+const grp=new T.Group();sc.add(grp);
+const PAL={facade:0xd9d2c3,glass:0x4b7aa8,trim:0xcfc4ad,roof:0x4a3a32,door:0x3a2a1a,gls:0x4b7aa8,facb:0x8a3a28,facc:0x333338,facd:0xa0602a,gar:0x8c8c85,rail:0xcfc4ad};
+function setCam(){cam.up.set(0,0,1);cam.position.set(tgt.x+dist*Math.cos(el)*Math.cos(az),tgt.y+dist*Math.cos(el)*Math.sin(az),tgt.z+dist*Math.sin(el));cam.lookAt(tgt)}
+let drag=null;rc.addEventListener("pointerdown",e=>{drag={x:e.clientX,y:e.clientY,b:e.button};rc.setPointerCapture(e.pointerId)});
+rc.addEventListener("pointerup",()=>drag=null);rc.addEventListener("contextmenu",e=>e.preventDefault());
+rc.addEventListener("pointermove",e=>{if(!drag)return;const dx=e.clientX-drag.x,dy=e.clientY-drag.y;drag.x=e.clientX;drag.y=e.clientY;
+  if(drag.b==2){const k=dist*.002;tgt.x-=(-Math.sin(az)*dx+Math.cos(az)*Math.sin(el)*dy)*k*-1;tgt.y-=(Math.cos(az)*dx+Math.sin(az)*Math.sin(el)*dy)*k*-1}
+  else{az-=dx*.01;el=Math.min(1.5,Math.max(.05,el+dy*.01))}});
+rc.addEventListener("wheel",e=>{e.preventDefault();dist=Math.min(500,Math.max(5,dist*(e.deltaY<0?.9:1.1)))},{passive:false});
+function clear(){while(grp.children.length){const o=grp.children.pop();o.geometry?.dispose()}}
+function proxy(){ // vista previa instantánea: prisma extruido
+  clear();if(!closed||pts.length<3)return;
+  const sh=new T.Shape(pts.map(p=>new T.Vector2(p[0],p[1])));
+  const h=+$("floors").value*+$("fh").value;
+  const g=new T.ExtrudeGeometry(sh,{depth:h,bevelEnabled:false});
+  const m=new T.Mesh(g,new T.MeshStandardMaterial({color:0xb9c4d4,transparent:true,opacity:.75}));grp.add(m);
+}
+function showReal(){
+  clear();const g=new T.BufferGeometry();
+  g.setAttribute("position",new T.Float32BufferAttribute(real.v,3));g.setIndex(real.f);
+  const names=real.mats, n=real.m.length; // grupos por material
+  const order=[...real.m.keys()].sort((a,b)=>real.m[a]-real.m[b]); const idx=[];order.forEach(t=>idx.push(real.f[t*3],real.f[t*3+1],real.f[t*3+2]));g.setIndex(idx);
+  let st=0;const mats=[];const used=[...new Set(real.m)].sort((a,b)=>a-b);
+  for(const mi of used){const c=order.filter(t=>real.m[t]==mi).length;g.addGroup(st*3,c*3,mats.length);st+=c;const nm=names[mi]||"facade";mats.push(new T.MeshStandardMaterial({color:PAL[nm]??0xcccccc,side:T.DoubleSide,roughness:nm.startsWith("gl")?.2:.85}))}
+  g.computeVertexNormals();grp.add(new T.Mesh(g,mats));
+}
+function loop(){const r=rc.getBoundingClientRect();if(rc.width!==r.width|0||rc.height!==r.height|0){R.setSize(r.width|0,r.height|0,false);cam.aspect=r.width/r.height;cam.updateProjectionMatrix()}
+  setCam();R.render(sc,cam);requestAnimationFrame(loop)}
+// ---------- motor ----------
+function changed(){real=null;$("bBuild").disabled=!closed;$("help").textContent=closed?"Planta cerrada. Cambiá pisos/alto y creá la malla real.":"Dibujá la planta: clic para poner esquinas, clic en la primera (amarilla) para cerrar.";
+  if(closed){const xs=pts.map(p=>p[0]),ys=pts.map(p=>p[1]);tgt.set((Math.min(...xs)+Math.max(...xs))/2,(Math.min(...ys)+Math.max(...ys))/2,+$("floors").value*+$("fh").value/2)}
+  proxy();drawPlan()}
+$("floors").oninput=$("fh").oninput=changed;
+$("bBuild").onclick=async()=>{
+  $("bBuild").disabled=true;$("stat").textContent="Blender está armando la malla…";
+  try{const r=await fetch("/build",{method:"POST",body:JSON.stringify({pts,floors:+$("floors").value,floor_h:+$("fh").value})});
+    const j=await r.json();if(j.error)throw new Error(j.error);real=j;showReal();$("stat").textContent=`Malla real: ${j.tris} triángulos`;window.__real=j}
+  catch(e){$("stat").textContent="Error: "+e.message}
+  $("bBuild").disabled=!closed};
+window.__ed={get pts(){return pts},get closed(){return closed}};
+addEventListener("resize",drawPlan);setTimeout(()=>{drawPlan()},50);requestAnimationFrame(loop);
+</script></body></html>

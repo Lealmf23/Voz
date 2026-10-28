@@ -5474,10 +5474,11 @@ def split_floors(bm, fh, zbase=None):
         k += 1
 
 
-def create_shape_object(context, kind, w, d, h, fh=0.0):
-    """Crea una malla base extruida y dividida por pisos (para editar con Tab). Siempre un objeto nuevo."""
+def create_shape_object(context, kind, w, d, h, fh=0.0, pts=None):
+    """Crea una malla base extruida y dividida por pisos (para editar con Tab). Siempre un objeto nuevo.
+    `pts`: planta propia (lista de (x, y) antihoraria); si no, la de `kind`."""
     bm = bmesh.new()
-    face = bm.faces.new([bm.verts.new((x, y, 0.0)) for x, y in shape_footprint(kind, w, d)])
+    face = bm.faces.new([bm.verts.new((x, y, 0.0)) for x, y in (pts or shape_footprint(kind, w, d))])
     ret = bmesh.ops.extrude_face_region(bm, geom=[face])
     top = [g for g in ret["geom"] if isinstance(g, bmesh.types.BMVert)]
     bmesh.ops.translate(bm, vec=(0.0, 0.0, h), verts=top)
