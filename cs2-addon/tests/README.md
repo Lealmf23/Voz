@@ -32,9 +32,21 @@ Se ejecutan con el módulo `bpy` (sin abrir Blender):
 | ui_draw | Todos los paneles de la barra lateral se dibujan sin errores (con y sin edificio, con y sin «Avanzado») |
 | facade_holes | Con la limpieza activa la fachada no queda con huecos (cornisas, persianas, molduras) |
 | icons | Todos los íconos del add-on existen en la versión de Blender |
+| tex_rotate | Giro de texturas: por material (90°, 180°, ángulo libre) y por pared (cuartos de vuelta); UV dentro de 0-1 en los tres LODs, geometría igual y sin giro todo igual |
+| tex_rotate_bake | Con el giro puesto, las UV únicas del horneado se arman sin islas superpuestas |
+| wall_mats | Material A-D por pared en los tres LODs y «Elegir paredes por material» |
+| comp_walls | El cuadro «Paredes» aplica material y giro solo a las paredes elegidas |
+| component_audit | Todas las ventanas, puertas y balcones incluidos: sin caras degeneradas, sin vértices sueltos y sin z-fighting |
+| flow_full | Recorrido completo (crear, personalizar, regenerar, UV, sombras, texturas, exportar) sin errores en el informe |
 | mip_bleed | Con mipmaps (textura achicada) un material no toma el color de su vecino, en el atlas ni en el horneado |
 | quick_view | La vista rápida muestra la textura elegida sin UV ni horneado, se apaga y se actualiza con el botón |
 | uv_zones | Prioridad de espacio por zona y zonas fijadas: lo fijado no se mueve al regenerar y no se pisa con otras islas |
 | retexture | «Rehacer texturas» deja UV, sombras y texturas asignadas, y se puede repetir |
 | tex_missing | Avisa de archivos de textura faltantes (panel, lista de control y mensajes) |
 | ground_mat | Material distinto en la planta baja (1 o 2 pisos, en los tres LODs) |
+
+## Notas
+- `CS2_PERF_SCALE=2 python3 tests/run_tests.py perf_big` multiplica las líneas base de tiempo si el equipo es más lento que el de Leo.
+- `CS2_UPDATE_GOLDEN=1` renueva los golden de balcones/paredes/geometría (solo si el cambio es a propósito: revisar el diff del JSON).
+- Cada caso termina con `os._exit` apenas imprime el resultado: en algunos equipos Blender se cuelga al cerrar y el corredor esperaba el tope de 300 s.
+- Si hay una biblioteca EGL instalada en el sistema, `bpy` se cuelga al redibujar sin ventana: dejarla fuera del `LD_LIBRARY_PATH` normal (ver CLAUDE.md).

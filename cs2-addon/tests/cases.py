@@ -21,6 +21,8 @@ def worse_than(name, value, higher_is_better=True, tol=0.10):
     ref = BASE.get(name)
     if ref is None:
         return
+    if name.endswith(".segundos"):       # los tiempos dependen del equipo: CS2_PERF_SCALE=2 si el equipo es el doble de lento
+        ref *= float(os.environ.get("CS2_PERF_SCALE", "1"))
     if higher_is_better:
         check(value >= ref * (1 - tol), f"{name} empeoró: {value} < {ref} (tolerancia {int(tol * 100)} %)")
     else:
@@ -1375,6 +1377,82 @@ def case_component_audit():
     check(n >= 150, f"se esperaban todos los estilos incluidos y hay {n}")
     check(not malos, "mallas con defectos: " + "; ".join(malos[:6]))
     result(estilos=n)
+
+
+def case_comp_walls():
+    """El cuadro «Paredes» aplica material y giro de textura a las paredes elegidas (y solo a ellas)."""
+    import bmesh
+    s = setup("L", "FLAT", 24, 16, 3, styles=False)
+    obj = s.shape_object
+    bpy.ops.cs2.edit_shape()
+    check(obj.mode == "EDIT", "no entró a elegir caras")
+    bm = bmesh.from_edit_mesh(obj.data)
+    walls = [f for f in bm.faces if abs(f.normal.z) < 0.1]
+    check(len(walls) >= 2, "la forma debería tener paredes")
+    for f in bm.faces:
+        f.select_set(False)
+    elegida = walls[0]
+    elegida.select_set(True)
+    bm.faces.active = elegida
+    bmesh.update_edit_mesh(obj.data, loop_triangles=False, destructive=False)
+    idx = elegida.index
+    bpy.ops.cs2.comp_walls("EXEC_DEFAULT", alcance="FACES", f_mat="3", f_rot="2")
+    bm = bmesh.from_edit_mesh(obj.data)
+    bm.faces.ensure_lookup_table()
+    lays = a.wall_layers(bm)
+    check("cs2_f_rot" in lays and "cs2_f_mat" in lays, "faltan las capas de material o de giro")
+    check(int(bm.faces[idx][lays["cs2_f_mat"]]) == 3, "la pared elegida no tomó el material C")
+    check(int(bm.faces[idx][lays["cs2_f_rot"]]) == 2, "la pared elegida no tomó el giro de 180°")
+    otras = [f for f in bm.faces if f.index != idx and abs(f.normal.z) < 0.1]
+    check(all(int(f[lays["cs2_f_rot"]]) == 0 and int(f[lays["cs2_f_mat"]]) == 0 for f in otras), "una pared no elegida cambió")
+    bpy.ops.cs2.edit_shape()
+    result(ok=True)
+
+
+def case_flow_full():
+    """Recorrido completo: crear, personalizar (material y giro por pared, giro del material, estilos), regenerar, UV, sombras,
+    texturas y exportar. Todo termina bien y no queda ningún error registrado en el informe."""
+    import bmesh
+    import shutil
+    brick = make_brick(os.path.join(tempfile.gettempdir(), "cs2_test_brick.png"))
+    a._ERRLOG.clear()
+    s = setup("L", "FLAT", 24, 16, 4, bake_ao=True, ms_facade_mode="PBR", ms_facade_img_color=brick, ms_facade_tile=2.0,
+              ms_facb_mode="PBR", ms_facb_img_color=brick, ms_facb_tile=1.5)
+    # personalizar: una pared con el material B girado, el material A girado 90°
+    obj = s.shape_object
+    bm = bmesh.new()
+    bm.from_mesh(obj.data)
+    bm.transform(obj.matrix_world)
+    lays = a.wall_layers(bm, create=True)
+    bm.transform(obj.matrix_world.inverted())
+    pared = next(f for f in bm.faces if f.normal.y < -0.9)
+    pared[lays["cs2_f_mat"]] = 2
+    pared[lays["cs2_f_rot"]] = 1
+    bm.to_mesh(obj.data)
+    bm.free()
+    s.ms_facade_rot = 90.0
+    bpy.ops.cs2.generate()
+    bpy.ops.cs2.regen_lods()
+    objs = lod_objs(s)
+    check(any(p.material_index == a.MAT["facb"] for p in objs[0].data.polygons), "la pared con material B no apareció")
+    for i, o in enumerate(objs):
+        check(finite_mesh(o.data), f"LOD{i}: malla con valores inválidos")
+    # texturas: UV únicas, sombras y asignación
+    check(bpy.ops.cs2.uv_generate() == {"FINISHED"}, "uv_generate falló")
+    p = a.props_to_params(s)
+    p["bake_samples"] = 8
+    a.bake_ao_all(bpy.context, p, objs, None)
+    check(bpy.ops.cs2.tex_assign() == {"FINISHED"}, "tex_assign falló")
+    # exportar
+    out = os.path.join(tempfile.gettempdir(), "cs2_test_flow")
+    shutil.rmtree(out, ignore_errors=True)
+    s.export_dir = out
+    check(bpy.ops.cs2.export() == {"FINISHED"}, "la exportación falló")
+    files = [os.path.join(rt, f) for rt, _d, fs in os.walk(out) for f in fs]
+    check(len([f for f in files if f.lower().endswith(".fbx")]) >= 3, "faltan los FBX")
+    check(len([f for f in files if f.lower().endswith((".png", ".tga"))]) >= 3, "faltan las texturas")
+    check(not a._ERRLOG, "quedaron errores registrados: " + "; ".join(f"{e['where']}: {e['msg'][:80]}" for e in a._ERRLOG[:5]))
+    result(ok=True, archivos=len(files))
 
 
 CASES = {k[5:]: v for k, v in globals().items() if k.startswith("case_")}

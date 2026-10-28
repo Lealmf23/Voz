@@ -9,7 +9,7 @@ Después: Vista 3D > tecla N > pestaña "CS2".
 bl_info = {
     "name": "CS2 Generador de Edificios",
     "author": "Leo",
-    "version": (2, 76, 0),
+    "version": (2, 77, 0),
     "blender": (4, 2, 0),
     "location": "Vista 3D > Barra lateral (N) > CS2",
     "description": "Edificios low-poly de todo tipo (residencial, comercial, oficinas, industrial, servicios y emblemáticos) con LODs y FBX para Cities: Skylines 2",
@@ -12639,6 +12639,12 @@ class CS2_PT_rev(bpy.types.Panel):
             box = lay.box()
             box.label(text="Materiales", icon="MATERIAL")
             box.prop(s, "wall_mat_g")
+            sl_ = ("facade", "facb", "facc", "facd")[min(max(int(s.wall_mat_g), 1), 4) - 1]
+            rr = box.row(align=True)         # el giro de la textura del material elegido, a mano
+            rr.prop(s, f"ms_{sl_}_rot", text="Giro de su textura")
+            for lab_, d_ in (("-90°", -90.0), ("+90°", 90.0)):
+                op = rr.operator("cs2.slot_rot", text=lab_)
+                op.slot, op.delta = sl_, d_
             box.prop(s, "ground_mat_g")
             if s.ground_mat_g != "0":
                 box.prop(s, "ground_n_g")
