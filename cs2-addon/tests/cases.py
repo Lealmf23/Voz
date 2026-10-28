@@ -1336,6 +1336,47 @@ def case_wall_mats():
     result(ok=True, paredes=counts)
 
 
+def case_component_audit():
+    """Mallas de todas las ventanas, puertas y balcones incluidos: sin caras degeneradas, sin vértices sueltos y sin caras de
+    distinto material superpuestas en el mismo plano y sentido (parpadean en el juego: z-fighting)."""
+    import bmesh
+    from mathutils import kdtree
+    if not hasattr(bpy.types.Scene, "cs2_building"):
+        a.register()
+    coll = bpy.context.scene.collection
+    malos = []
+    n = 0
+    for name, st in a.builtin_list():
+        if st.get("kind") not in ("window", "door", "balcony"):
+            continue
+        n += 1
+        ob, _size = a.make_style_object(bpy.context, st, "audit", coll, (0, 0, 0))
+        bm = bmesh.new()
+        bm.from_mesh(ob.data)
+        bm.faces.ensure_lookup_table()
+        tiny = sum(1 for f in bm.faces if f.calc_area() < 1e-7)
+        loose = sum(1 for v in bm.verts if not v.link_faces)
+        kd = kdtree.KDTree(len(bm.faces))
+        for f in bm.faces:
+            kd.insert(f.calc_center_median(), f.index)
+        kd.balance()
+        zf = 0
+        for f in bm.faces:
+            for _co, i, _d in kd.find_range(f.calc_center_median(), 1e-3):
+                g = bm.faces[i]
+                if i > f.index and f.normal.dot(g.normal) > 0.999 and f.material_index != g.material_index:
+                    zf += 1
+        if tiny or loose or zf:
+            malos.append(f"{name} (degeneradas={tiny}, sueltos={loose}, z-fighting={zf})")
+        bm.free()
+        me = ob.data
+        bpy.data.objects.remove(ob)
+        bpy.data.meshes.remove(me)
+    check(n >= 150, f"se esperaban todos los estilos incluidos y hay {n}")
+    check(not malos, "mallas con defectos: " + "; ".join(malos[:6]))
+    result(estilos=n)
+
+
 CASES = {k[5:]: v for k, v in globals().items() if k.startswith("case_")}
 
 if __name__ == "__main__":

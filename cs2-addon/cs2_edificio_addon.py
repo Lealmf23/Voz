@@ -1292,7 +1292,9 @@ def insert_balcony(bm, st, o, u, n, a_mid, zb, bd=None, bw=None, rail=None, ww=1
     # pasamanos, travesaños y paños continuos, con las esquinas a inglete
     for ch in chains:
         if rtype == "SOLID":
-            sweep(ch, 0.06, rail_h / 2, rail_h / 2, solid_mat)
+            # con pasamanos, el antepecho llega hasta su base: si los dos terminaran a la misma altura, sus tapas coincidirían (z-fighting)
+            ph = rail_h - 2 * cap_hv if cap_on else rail_h
+            sweep(ch, 0.06, ph / 2, ph / 2, solid_mat)
         elif rtype == "GLASS":
             sweep(ch, 0.012, (zhi - zlo) / 2, (zlo + zhi) / 2, GLASS)
         if rtype in ("BALUSTERS", "GLASS", "LATTICE"):
@@ -1301,7 +1303,7 @@ def insert_balcony(bm, st, o, u, n, a_mid, zb, bd=None, bw=None, rail=None, ww=1
             sweep(ch, 0.025, 0.025, 0.045, RAIL)
             sweep(ch, 0.012, 0.012, rail_h * 0.5, RAIL)
         if rtype != "NONE" and cap_on:
-            sweep(ch, cap_hw, cap_hv, rail_h - cap_hv, RAIL)
+            sweep(ch, max(cap_hw, 0.075) if rtype == "SOLID" else cap_hw, cap_hv, rail_h - cap_hv, RAIL)   # sobre el antepecho, sobresale un poco
         if s["bal_planter"] and rtype != "NONE":
             ph = s["bal_planter_h"]
             sweep(ch, 0.09, ph / 2, ph / 2, TRIM)
