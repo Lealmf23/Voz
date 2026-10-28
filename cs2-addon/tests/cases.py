@@ -2283,6 +2283,30 @@ def case_comp_panel():
     result(ok=True)
 
 
+
+def case_tex_no_pil():
+    """Las texturas se arman sin PIL (el Python de Blender no la trae): se bloquea la importación y se asignan igual."""
+    import builtins
+    real_import = builtins.__import__
+
+    def no_pil(name, *a_, **k_):
+        if name == "PIL" or name.startswith("PIL."):
+            raise ModuleNotFoundError("No module named 'PIL'")
+        return real_import(name, *a_, **k_)
+    s = setup("L", "FLAT", 24, 16, 4, bake_ao=True)
+    objs = lod_objs(s)
+    p = a.props_to_params(s)
+    builtins.__import__ = no_pil
+    try:
+        a.uv_generate(bpy.context, p, objs, None)
+        a.bake_ao_all(bpy.context, p, objs, None)
+        a.assign_textures(bpy.context, p, objs, None)
+    finally:
+        builtins.__import__ = real_import
+    check(objs[0].data.get("cs2_assigned"), "no se asignaron las texturas sin PIL")
+    result(ok=True)
+
+
 CASES = {k[5:]: v for k, v in globals().items() if k.startswith("case_")}
 
 if __name__ == "__main__":

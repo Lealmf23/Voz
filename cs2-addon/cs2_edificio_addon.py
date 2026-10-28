@@ -9,7 +9,7 @@ Después: Vista 3D > tecla N > pestaña "CS2".
 bl_info = {
     "name": "CS2 Generador de Edificios",
     "author": "Leo",
-    "version": (2, 84, 0),
+    "version": (2, 85, 0),
     "blender": (4, 2, 0),
     "location": "Vista 3D > Barra lateral (N) > CS2",
     "description": "Edificios low-poly de todo tipo (residencial, comercial, oficinas, industrial, servicios y emblemáticos) con LODs y FBX para Cities: Skylines 2",
@@ -8017,8 +8017,7 @@ def uv_transfer(me, base_name, uni_name, size, arrays, margin, keys=TEX_SUFFIXES
     color del atlas en su punto (bilineal) y la normal se gira del marco tangente del atlas al de la isla. Afuera de las islas se extiende
     el borde `margin` píxeles (como el margen EXTEND del horneo). Devuelve ({mapa: RGBA size x size}, cobertura)."""
     import numpy as np
-    from PIL import Image, ImageDraw, ImageFilter
-    sub_mats = SUB_MATS
+    sub_mats = SUB_MATS                 # solo numpy: el Python de Blender no trae PIL
     nl = len(me.loops)
     bu = np.empty(nl * 2, np.float32); me.uv_layers[base_name].data.foreach_get("uv", bu); bu = bu.reshape(-1, 2).astype(np.float64)
     uu = np.empty(nl * 2, np.float32); me.uv_layers[uni_name].data.foreach_get("uv", uu); uu = uu.reshape(-1, 2).astype(np.float64)
@@ -8031,15 +8030,38 @@ def uv_transfer(me, base_name, uni_name, size, arrays, margin, keys=TEX_SUFFIXES
     pm = np.empty(len(me.polygons), np.int32); me.polygons.foreach_get("material_index", pm)
     pn = np.empty(len(me.polygons) * 3, np.float32); me.polygons.foreach_get("normal", pn); pn = pn.reshape(-1, 3).astype(np.float64)
     keep = ~np.isin(pm[tp], np.array(sub_mats))
-    # quién es dueño de cada texel: se dibujan los triángulos con su número (el primero que lo toma se lo queda: se dibuja al revés)
-    img = Image.new("I", (size, size), 0)
-    dr = ImageDraw.Draw(img)
+    # quién es dueño de cada texel: un triángulo que contiene el centro del texel. Se rasteriza por filas (vectorizado): para cada fila de
+    # cada triángulo se calcula el tramo [xl, xr] donde la línea del centro corta sus bordes y se marcan solo esos texels. Donde dos
+    # islas se pisan a propósito (gemelas, mismo contenido) da igual cuál queda
     ids = np.nonzero(keep)[0]
-    U = uu[tl[ids]] * size
-    for k in range(len(ids) - 1, -1, -1):
-        q = U[k]
-        dr.polygon([(q[0, 0], q[0, 1]), (q[1, 0], q[1, 1]), (q[2, 0], q[2, 1])], fill=int(ids[k]) + 1)
-    owner = np.asarray(img, np.int64) - 1          # fila = v * size (el eje v de la imagen va hacia abajo en PIL: mismo orden que el arreglo)
+    U = uu[tl[ids]] * size                                    # (n, 3, 2) en píxeles
+    by0 = np.clip(np.floor(U[:, :, 1].min(1) - 0.5), 0, size - 1).astype(np.int64)
+    by1 = np.clip(np.ceil(U[:, :, 1].max(1) - 0.5), 0, size - 1).astype(np.int64)
+    bh = np.maximum(0, by1 - by0 + 1)
+    kr = np.repeat(np.arange(len(ids)), bh)                   # triángulo de cada fila
+    yr = by0[kr] + (np.arange(int(bh.sum())) - np.repeat(np.cumsum(bh) - bh, bh))
+    yc = yr + 0.5
+    xl = np.full(len(kr), np.inf)
+    xr = np.full(len(kr), -np.inf)
+    for e0, e1 in ((0, 1), (1, 2), (2, 0)):
+        xa, ya = U[kr, e0, 0], U[kr, e0, 1]
+        xb, yb = U[kr, e1, 0], U[kr, e1, 1]
+        lo, hi = np.minimum(ya, yb), np.maximum(ya, yb)
+        hitr = (yc >= lo - 1e-6) & (yc <= hi + 1e-6) & (hi - lo > 1e-9)
+        tt = np.where(hitr, (yc - ya) / np.where(hi - lo > 1e-9, yb - ya, 1.0), 0.0)
+        xx = xa + tt * (xb - xa)
+        xl = np.where(hitr, np.minimum(xl, xx), xl)
+        xr = np.where(hitr, np.maximum(xr, xx), xr)
+    xs0 = np.clip(np.ceil(xl - 0.5 - 1e-6), 0, size - 1)
+    xs1 = np.clip(np.floor(xr - 0.5 + 1e-6), -1, size - 1)
+    ok_r = np.isfinite(xl) & np.isfinite(xr) & (xs1 >= xs0)
+    xs0, xs1 = xs0.astype(np.int64), xs1.astype(np.int64)
+    span = np.where(ok_r, xs1 - xs0 + 1, 0)
+    rp = np.repeat(np.arange(len(kr)), span)                  # fila de cada texel
+    xp = xs0[rp] + (np.arange(int(span.sum())) - np.repeat(np.cumsum(span) - span, span))
+    owner_flat = np.full(size * size, -1, np.int64)
+    owner_flat[yr[rp] * size + xp] = ids[kr[rp]]
+    owner = owner_flat.reshape(size, size)
     cov = owner >= 0
     Ys, Xs = np.nonzero(cov)
     t = owner[Ys, Xs]
@@ -8102,15 +8124,25 @@ def uv_transfer(me, base_name, uni_name, size, arrays, margin, keys=TEX_SUFFIXES
             sm = np.stack([xx * 0.5 + 0.5, yy * 0.5 + 0.5, zz * 0.5 + 0.5, np.ones_like(xx)], 1)
         res[flat_idx] = sm
         out[key] = res.reshape(size, size, 4)
-    # margen: cada texel vacío toma el índice de un vecino cubierto (filtro de máximo de PIL, en C), `margin` veces
-    src = np.where(cov, np.arange(size * size, dtype=np.int64).reshape(size, size), -1).astype(np.int32)
-    im = Image.fromarray(src, "I")
+    # margen: cada texel vacío toma el índice de un vecino cubierto, `margin` veces (desplazamientos con rebanadas de numpy)
+    src = np.where(cov, np.arange(size * size, dtype=np.int64).reshape(size, size), -1)
     for _ in range(margin):
-        grown = np.asarray(im.filter(ImageFilter.MaxFilter(3)), np.int32)
-        cur = np.asarray(im, np.int32)
-        nxt = np.where(cur >= 0, cur, grown)
-        im = Image.fromarray(nxt, "I")
-    src = np.asarray(im, np.int32)
+        empty = src < 0
+        if not empty.any():
+            break
+        nb = np.full_like(src, -1)
+        for dy, dx in ((0, 1), (0, -1), (1, 0), (-1, 0), (1, 1), (1, -1), (-1, 1), (-1, -1)):
+            sh = np.full_like(src, -1)
+            ys_d = slice(max(dy, 0), size + min(dy, 0))
+            ys_s = slice(max(-dy, 0), size + min(-dy, 0))
+            xs_d = slice(max(dx, 0), size + min(dx, 0))
+            xs_s = slice(max(-dx, 0), size + min(-dx, 0))
+            sh[ys_d, xs_d] = src[ys_s, xs_s]
+            np.maximum(nb, sh, out=nb)
+        nxt = np.where(empty, nb, src)
+        if (nxt == src).all():
+            break
+        src = nxt
     grow = (~cov) & (src >= 0)
     if grow.any():
         gi = src[grow]

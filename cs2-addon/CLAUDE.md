@@ -1,6 +1,6 @@
 # CS2 Generador de Edificios (add-on de Blender)
 
-Add-on de un solo archivo (`cs2_edificio_addon.py`, v2.84, ~16 700 líneas) que genera edificios low-poly
+Add-on de un solo archivo (`cs2_edificio_addon.py`, v2.85, ~16 700 líneas) que genera edificios low-poly
 para Cities: Skylines 2 (y CS1) con LODs, UV, texturas y exportación FBX. Blender 4.2+.
 
 ## Cómo trabajar con Leo
@@ -103,7 +103,7 @@ para Cities: Skylines 2 (y CS1) con LODs, UV, texturas y exportación FBX. Blend
 - `create_shape_object(..., pts=)` acepta una planta propia (lo usa el motor). Retranqueos: `make_levels`/`stepped_shape` arman una malla cerrada por tramos (`setbacks:[{from,ins}]`); las ediciones del tramo k de una pared van en `edge.sx[k]`.
 
 ## Texturas horneadas sin Cycles (v2.84)
-- `bake_lod` ya no usa Cycles: `uv_transfer` dibuja los triángulos en las UV únicas (PIL, dueño por texel), calcula baricéntricas, muestrea
+- `bake_lod` ya no usa Cycles: `uv_transfer` rasteriza por filas los triángulos en las UV únicas (solo numpy: el Python de Blender NO trae PIL; prueba `tex_no_pil`), calcula baricéntricas, muestrea
   el atlas (bilineal con repetición, como Cycles) y gira las normales del marco tangente del atlas al de la isla (`_uv_frames`); el margen se
   extiende con un filtro de máximo sobre índices. Comparado con el horneo de Cycles: diferencia media 0,004 en color y 0,001 en normales.
 - `pack` del desenvuelto arranca la bisección en un tope por área (1,3/√Σ w·h·wt²) y corta al 0,2 %: menos intentos, mismo resultado.
