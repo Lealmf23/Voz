@@ -11,7 +11,7 @@ para Cities: Skylines 2 (y CS1) con LODs, UV, texturas y exportación FBX. Blend
 
 ## Pruebas (headless, sin abrir Blender)
     pip install bpy numpy pillow
-    python3 tests/run_tests.py                 # todo, ~10 min, 41 casos
+    python3 tests/run_tests.py                 # todo, ~11 min, 42 casos
     CS2_PERF_SCALE=2 python3 tests/run_tests.py perf_big   # si el equipo es el doble de lento que el de Leo
     python3 tests/run_tests.py roof_join scope_sync
     python3 tests/run_tests.py --update-baselines   # solo si la mejora es a propósito
@@ -43,11 +43,11 @@ para Cities: Skylines 2 (y CS1) con LODs, UV, texturas y exportación FBX. Blend
 ## Herramientas de revisión (headless)
 - `tools/hojas_componentes.py <carpeta> <window|door|balcony>`: hojas de contacto con todos los estilos incluidos.
 - `tools/render_edificio.py <salida.png> [giro] [giro_pared_frontal]`: edificio con ladrillo y vista rápida para ver el giro.
-- `component_audit` (en las pruebas) detecta caras degeneradas, vértices sueltos y z-fighting en todos los estilos.
+- `component_audit` y `building_audit` (en las pruebas) detectan caras degeneradas, vértices sueltos y z-fighting en todos los estilos, techos, porches y estilos generales.
 - `comp.py` es una copia vieja del bloque de componentes que ya vive dentro de `cs2_edificio_addon.py`: no se importa en ningún lado.
 
 ## Estado y pendientes
-- 41/41 pruebas OK en v2.77 (`perf_big` con `CS2_PERF_SCALE` en equipos lentos).
+- 42/42 pruebas OK en v2.77 (`perf_big` con `CS2_PERF_SCALE` en equipos lentos).
 - Hecho en v2.77: errores silenciosos al informe (quedan solo los de la barra de progreso/redibujo y `ValueError` esperados de `bm.faces.new`),
   giro de texturas, material y giro por pared, antepechos macizos sin z-fighting, pruebas nuevas (rotación, materiales, auditoría, recorrido).
 - Visto en la revisión de componentes, sin tocar: las ventanas y puertas con forma (arco, círculo, óvalo...) se hunden en un nicho

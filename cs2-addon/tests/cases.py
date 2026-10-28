@@ -1455,6 +1455,66 @@ def case_flow_full():
     result(ok=True, archivos=len(files))
 
 
+def case_building_audit():
+    """Edificios completos con cada techo, porche y estilo general incluidos: sin caras degeneradas ni caras de distinto material
+    superpuestas en el mismo plano y sentido (LOD0 y LOD1)."""
+    import bmesh
+    from mathutils import kdtree
+
+    def defectos(o):
+        bm = bmesh.new()
+        bm.from_mesh(o.data)
+        bm.faces.ensure_lookup_table()
+        tiny = sum(1 for f in bm.faces if f.calc_area() < 1e-7)
+        kd = kdtree.KDTree(len(bm.faces))
+        for f in bm.faces:
+            kd.insert(f.calc_center_median(), f.index)
+        kd.balance()
+        zf = 0
+        for f in bm.faces:
+            for _co, i, _d in kd.find_range(f.calc_center_median(), 1e-3):
+                g = bm.faces[i]
+                if i > f.index and f.normal.dot(g.normal) > 0.999 and f.material_index != g.material_index:
+                    zf += 1
+        bm.free()
+        return tiny, zf
+
+    s = setup("L", "FLAT", 24, 16, 3, styles=True)
+    malos = []
+    n = 0
+
+    def correr(tag):
+        nonlocal n
+        n += 1
+        bpy.ops.cs2.generate()
+        bpy.ops.cs2.regen_lods()
+        for lod, o in enumerate(lod_objs(s)[:2]):
+            tiny, zf = defectos(o)
+            if tiny or zf:
+                malos.append(f"{tag} LOD{lod} (degeneradas={tiny}, z-fighting={zf})")
+    for pr in list(a.ROOF_PRESETS):
+        s.r_preset = pr
+        correr("techo " + pr)
+    s.r_preset = "FLAT"
+    for key, (_nm, data) in a.PORCH_PRESETS.items():
+        vals = dict(a.PORCH_DEF)
+        vals.update(walls=1)
+        vals.update(data)
+        s.por_on_g = True if isinstance(s.por_on_g, bool) else "1"
+        for k in a.PORCH_ENUMS:
+            setattr(s, f"por_{k}_g", str(int(vals[k])))
+        for k in a.PORCH_NUMS:
+            setattr(s, f"por_{k}_g", float(vals[k]))
+        correr("porche " + key)
+    s.por_on_g = False if isinstance(s.por_on_g, bool) else "0"
+    for k in a.LOOK_PRESETS:
+        bpy.ops.cs2.look(look=k)
+        correr("estilo " + k)
+    check(n >= 20, f"se esperaban todos los techos, porches y estilos y hay {n}")
+    check(not malos, "mallas con defectos: " + "; ".join(malos[:6]))
+    result(edificios=n)
+
+
 CASES = {k[5:]: v for k, v in globals().items() if k.startswith("case_")}
 
 if __name__ == "__main__":
