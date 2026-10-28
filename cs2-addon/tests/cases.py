@@ -2180,6 +2180,41 @@ def case_ranuras_curva():
     result(base=base)
 
 
+
+def case_facade_types():
+    """Los tipos de fachada se ven en un panel registrado (Personalizar) y cada uno genera un edificio sin errores."""
+    s = setup("BOX", "FLAT", 20, 12, 3)
+    s.ui_tab = "PERS"
+    seen = []
+
+    class Rec(_FakeLayout):
+        def operator(self, idname, *a_, **k_):
+            seen.append(idname)
+            return _FakeLayout()
+
+        def __getattr__(self, n):
+            if n.startswith("__"):
+                raise AttributeError(n)
+            return lambda *a_, **k_: Rec()
+    panels = [c for c in a.classes if isinstance(c, type) and issubclass(c, bpy.types.Panel)]
+    for cls in panels:
+        if getattr(cls, "poll", None) and not cls.poll(bpy.context):
+            continue
+        inst = type("X", (), {})()
+        inst.layout = Rec()
+        cls.draw(inst, bpy.context)
+    check("cs2.facade_type" in seen, "los tipos de fachada no aparecen en ningún panel visible")
+    tris = {}
+    for k in a.FACADE_TYPES:
+        r = bpy.ops.cs2.facade_type(kind=k)
+        check("FINISHED" in r, f"{k}: no se aplicó")
+        o = a._main_obj(s)
+        check(o is not None and finite_mesh(o.data), f"{k}: malla inválida")
+        tris[k] = a.mesh_tris(o)
+        check(tris[k] < 20000, f"{k}: {tris[k]} triángulos en la malla principal (demasiados)")
+    result(tipos=len(tris), max_tris=max(tris.values()))
+
+
 CASES = {k[5:]: v for k, v in globals().items() if k.startswith("case_")}
 
 if __name__ == "__main__":

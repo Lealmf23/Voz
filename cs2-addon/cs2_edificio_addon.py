@@ -9,7 +9,7 @@ Después: Vista 3D > tecla N > pestaña "CS2".
 bl_info = {
     "name": "CS2 Generador de Edificios",
     "author": "Leo",
-    "version": (2, 81, 0),
+    "version": (2, 82, 0),
     "blender": (4, 2, 0),
     "location": "Vista 3D > Barra lateral (N) > CS2",
     "description": "Edificios low-poly de todo tipo (residencial, comercial, oficinas, industrial, servicios y emblemáticos) con LODs y FBX para Cities: Skylines 2",
@@ -13546,11 +13546,6 @@ class CS2_PT_rev(bpy.types.Panel):
             row = lay.row(align=True)
             for k, v in LOOK_PRESETS.items():
                 row.operator("cs2.look", text=v[0].replace("Casa moderna: ", ""), icon="HOME").look = k
-            fbox = lay.box()
-            fbox.label(text="Tipos de fachada", icon="OUTLINER_OB_MESH")
-            grid = fbox.grid_flow(columns=2, align=True)
-            for k, v in FACADE_TYPES.items():
-                grid.operator("cs2.facade_type", text=v[0]).kind = k
             box = lay.box()
             box.label(text="Materiales", icon="MATERIAL")
             box.prop(s, "wall_mat_g")
@@ -16370,6 +16365,15 @@ class CS2_PT_comp(bpy.types.Panel):
         for spec in _COMP["specs"].values():
             row = col.row(align=True)
             row.operator(f"cs2.comp_{spec['key']}", text=spec["label"], icon=spec["icon"])
+        if not editing:                 # tipos de fachada y estilos de una vez (valen para todo el edificio)
+            fbox = lay.box()
+            fbox.label(text="Tipos de fachada", icon="OUTLINER_OB_MESH")
+            grid = fbox.grid_flow(columns=2, align=True)
+            for k, v in FACADE_TYPES.items():
+                grid.operator("cs2.facade_type", text=v[0]).kind = k
+            row = fbox.row(align=True)
+            for k, v in LOOK_PRESETS.items():
+                row.operator("cs2.look", text=v[0].replace("Casa moderna: ", ""), icon="HOME").look = k
 
 
 def _register_components():

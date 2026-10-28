@@ -1,6 +1,6 @@
 # CS2 Generador de Edificios (add-on de Blender)
 
-Add-on de un solo archivo (`cs2_edificio_addon.py`, v2.81, ~16 900 líneas) que genera edificios low-poly
+Add-on de un solo archivo (`cs2_edificio_addon.py`, v2.82, ~16 900 líneas) que genera edificios low-poly
 para Cities: Skylines 2 (y CS1) con LODs, UV, texturas y exportación FBX. Blender 4.2+.
 
 ## Cómo trabajar con Leo
@@ -100,7 +100,11 @@ para Cities: Skylines 2 (y CS1) con LODs, UV, texturas y exportación FBX. Blend
 - `comp.py` es una copia vieja del bloque de componentes que ya vive dentro de `cs2_edificio_addon.py`: no se importa en ningún lado.
 
 ## Estado y pendientes
-- 50/50 pruebas OK en v2.81 (`perf_big` con `CS2_PERF_SCALE` en equipos lentos).
+- 51/51 pruebas OK en v2.82 con bpy 4.5 y 50/50 también con bpy 5.2.1 (Python 3.13; Leo usa Blender 5.2.1). `perf_big` con `CS2_PERF_SCALE`.
+- Tipos de fachada (v2.82): `FACADE_TYPES`/`FACADE_BASE` + `cs2.facade_type`, botones en `CS2_PT_comp` (Personalizar). Prueba `facade_types`.
+- `tools/ui_dump.py`: vuelca como texto lo que muestra cada pestaña (auditoría de la interfaz sin abrir Blender).
+- Cierre de Blender 5.2.1 reportado por Leo (2026-10-28): dentro del deshacer (`ED_undo_operator_repeat` → `memfile_undo_decode`)
+  al cambiar valores en «Ajustar última operación» de un componente después de entrar/salir de Editar forma. No se reprodujo sin interfaz.
 - Hecho en v2.77: errores silenciosos al informe (quedan solo los de la barra de progreso/redibujo y `ValueError` esperados de `bm.faces.new`),
   giro de texturas, material y giro por pared, antepechos macizos sin z-fighting, pruebas nuevas (rotación, materiales, auditoría, recorrido).
 - Visto en la revisión de componentes, sin tocar: las ventanas y puertas con forma (arco, círculo, óvalo...) se hunden en un nicho
