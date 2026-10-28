@@ -2284,6 +2284,37 @@ def case_comp_panel():
 
 
 
+def case_ao_homog():
+    """La sombra horneada de una fachada es pareja: los paños de pared vecinos (dintel, antepecho, entre ventanas) no comparten
+    isla con gemelas de otro piso (quedaban rectángulos de otro tono) y la sombra se parece a la exacta."""
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "tools"))
+    from seams import bake_error
+    s = setup("BOX", "FLAT", 20, 12, 3, bake_ao=True, balconies="alternate", balcony_style="Balcón baranda maciza",
+              string_courses=True)
+    objs = lod_objs(s)
+    p = a.props_to_params(s)
+    a.uv_generate(bpy.context, p, objs, None)
+    me = objs[0].data
+    reps = list(me["cs2_reps"])
+    walls = {a.MAT["facade"], a.MAT["facb"], a.MAT["facc"], a.MAT["facd"]}
+    e2p = {}
+    for poly in me.polygons:
+        if poly.material_index in walls and abs(poly.normal.z) < 0.3:      # la fachada (no los techos de los balcones)
+            for k in poly.edge_keys:
+                e2p.setdefault(k, []).append(poly.index)
+    shared = 0
+    for fs in e2p.values():
+        if len(fs) == 2 and me.polygons[fs[0]].normal.dot(me.polygons[fs[1]].normal) > 0.999:
+            shared += sum(1 for f in fs if reps[f] != f)
+    check(shared == 0, f"{shared} paños de pared continuos comparten isla con una gemela")
+    a.bake_ao_all(bpy.context, p, objs, None)
+    ao = a.read_ao(s.building_name, 0, a.uv_state(me)["uid"])
+    err = bake_error(me, ao, n_per_face=3)
+    check(err["error_medio"] < 0.045, f"sombra horneada lejos de la exacta: {err}")
+    check(err[">0.1"] < 8.0, f"demasiados puntos con error > 0.1: {err}")
+    result(**err)
+
+
 def case_tex_no_pil():
     """Las texturas se arman sin PIL (el Python de Blender no la trae): se bloquea la importación y se asignan igual."""
     import builtins

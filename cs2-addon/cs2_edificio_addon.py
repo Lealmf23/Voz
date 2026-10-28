@@ -9,7 +9,7 @@ Después: Vista 3D > tecla N > pestaña "CS2".
 bl_info = {
     "name": "CS2 Generador de Edificios",
     "author": "Leo",
-    "version": (2, 85, 0),
+    "version": (2, 86, 0),
     "blender": (4, 2, 0),
     "location": "Vista 3D > Barra lateral (N) > CS2",
     "description": "Edificios low-poly de todo tipo (residencial, comercial, oficinas, industrial, servicios y emblemáticos) con LODs y FBX para Cities: Skylines 2",
@@ -6612,13 +6612,19 @@ def _ao_at(bvh, dirs, P, nrm, dist, rot=0.0):
     return 1.0 - hit / len(dirs)
 
 
-def compute_ao_map(me, uv_name, size, dist, rays, only=None):
+AO_REFINE_DEN = 0.5      # texels de borde cuyo agrandado tiene menos de este peso de muestras propias: se calculan con rayos propios
+AO_REFINE_JUMP = 0.2
+AO_REFINE_SMALL = 24     # caras con menos muestras que esto en la grilla gruesa se refinan enteras   # salto de sombra entre muestras vecinas de la grilla a partir del cual se refina
+
+
+def compute_ao_map(me, uv_name, size, dist, rays, only=None, refine=True):
     """Oclusión ambiental (1 = sin sombra) como imagen size x size sobre la UV `uv_name` de la malla.
 
     Lanza rayos con el BVH de Blender desde una grilla gruesa (la oclusión es suave) y la agranda SIN mezclar
     islas: cada texel final solo toma muestras de su propia cara (así las sombras oscuras de los costados de las
     ventanas no manchan la pared de al lado). Los huecos entre islas se rellenan para que el margen no oscurezca.
-    `only`: conjunto de polígonos a rasterizar (los demás comparten isla con alguno de ellos)."""
+    `only`: conjunto de polígonos a rasterizar (los demás comparten isla con alguno de ellos).
+    `refine`: rayos por texel donde la sombra cambia rápido (el LOD0; los otros se ven de lejos)."""
     import numpy as np
     bvh = _occluder_bvh(me)
     if bvh is None:
@@ -6639,7 +6645,9 @@ def compute_ao_map(me, uv_name, size, dist, rays, only=None):
     ao_lo = np.zeros((G, G), np.float32)
     own_lo = np.full((G, G), -1, np.int32)
     own_hi = np.full((size, size), -1, np.int32)
-    dirs = _hammersley_dirs(rays)
+    tri_hi = np.full((size, size), -1, np.int32)         # triángulo (en tri_data) de cada texel: para rehacer los bordes con rayos propios
+    dirs = _hammersley_dirs(rays * 2 if refine else rays)   # LOD0: la grilla gruesa con el doble de rayos (son pocos puntos): menos ruido en los paños lisos
+    dirs_fix = _hammersley_dirs(rays)
 
     def raster(pts, N):
         """Texels (ix, iy, w0, w1, w2) de un triángulo en una grilla N x N."""
@@ -6660,7 +6668,7 @@ def compute_ao_map(me, uv_name, size, dist, rays, only=None):
         iy, ix = np.nonzero(ins)
         return x0 + ix, y0 + iy, w0[iy, ix], w1[iy, ix], w2[iy, ix]
 
-    for loops, vi, nrm, pi in tri_data:
+    for ti, (loops, vi, nrm, pi) in enumerate(tri_data):
         pts = uv[list(loops)]
         pa, pb, pc = (verts[i] for i in vi)
         # mapa de pertenencia a resolución final (para no mezclar islas al agrandar)
@@ -6668,6 +6676,7 @@ def compute_ao_map(me, uv_name, size, dist, rays, only=None):
         if hi is not None:
             sel = own_hi[hi[1], hi[0]] < 0
             own_hi[hi[1][sel], hi[0][sel]] = pi
+            tri_hi[hi[1][sel], hi[0][sel]] = ti
         lo = raster(pts, G)
         if lo is None or len(lo[0]) == 0:
             # triángulo más chico que un texel: usa el texel de su centro
@@ -6699,9 +6708,48 @@ def compute_ao_map(me, uv_name, size, dist, rays, only=None):
             num += w * ao_lo[yy][:, xx]
             den += w
     ao = np.where(den > 1e-6, num / np.maximum(den, 1e-6), np.nan).astype(np.float32)
-    # texels sin ninguna muestra propia (caras diminutas): promedio de su cara
+    # texels con pocas muestras propias alrededor (bordes de islas angostas: debajo de un balcón, arriba de una ventana) o sin ninguna:
+    # agrandar ahí estira una sola muestra y deja escalones contra la isla vecina. Se calculan con rayos en su punto exacto
+    fix = (own_hi >= 0) & (np.isnan(ao) | (den < AO_REFINE_DEN))
+    # donde la sombra cambia rápido (junto a marcos, bajo balcones y cornisas) la grilla gruesa deja manchas de 4 x 4
+    # texels: ahí también se lanza un rayo por texel. En paños lisos la sombra es suave y alcanza con la grilla
+    jump = np.zeros((G, G), np.float32)
+    for dy in (-1, 0, 1):
+        for dx in (-1, 0, 1):
+            if dx == 0 and dy == 0:
+                continue
+            nb = np.roll(np.roll(ao_lo, dy, 0), dx, 1)
+            same = (np.roll(np.roll(own_lo, dy, 0), dx, 1) == own_lo) & (own_lo >= 0)
+            jump = np.maximum(jump, np.where(same, np.abs(nb - ao_lo), 0.0))
+    busy = jump > AO_REFINE_JUMP
+    # caras chicas (dinteles, antepechos): con tan pocas muestras no hay salto que medir y quedarían de un solo tono
+    n_lo = np.bincount(own_lo[own_lo >= 0], minlength=max(1, int(own_lo.max()) + 1))
+    busy |= (own_lo >= 0) & (n_lo[np.maximum(own_lo, 0)] < AO_REFINE_SMALL)
+    if refine:
+        fix |= (own_hi >= 0) & (busy[y0][:, x0] | busy[y0][:, x1] | busy[y1][:, x0] | busy[y1][:, x1])
+    if fix.any():
+        fy_, fx_ = np.nonzero(fix)
+        for ty, tx in zip(fy_.tolist(), fx_.tolist()):
+            ti = int(tri_hi[ty, tx])
+            if ti < 0:
+                continue
+            loops, vi, nrm, _pi = tri_data[ti]
+            q = uv[list(loops)] * size
+            (ax, ay), (bx, by), (cx, cy) = q
+            dd = (by - cy) * (ax - cx) + (cx - bx) * (ay - cy)
+            if abs(dd) < 1e-12:
+                continue
+            gx, gy = tx + 0.5, ty + 0.5
+            w0 = ((by - cy) * (gx - cx) + (cx - bx) * (gy - cy)) / dd
+            w1 = ((cy - ay) * (gx - cx) + (ax - cx) * (gy - cy)) / dd
+            w0, w1 = min(1.0, max(0.0, w0)), min(1.0, max(0.0, w1))
+            w2 = max(0.0, 1.0 - w0 - w1)
+            pa, pb, pc = (verts[i] for i in vi)
+            P = (pa * w0 + pb * w1 + pc * w2) / max(w0 + w1 + w2, 1e-9)
+            rot = ((tx * 73856093) ^ (ty * 19349663)) % 1000 / 1000.0 * 2.0 * math.pi
+            ao[ty, tx] = _ao_at(bvh, dirs_fix, P, nrm, dist, rot)
     miss = np.isnan(ao) & (own_hi >= 0)
-    if miss.any():
+    if miss.any():                       # (quedan solo si algo falló arriba) promedio de su cara
         nid = int(max(own_hi.max(), own_lo.max())) + 1
         ids = own_lo[own_lo >= 0]
         s_ = np.bincount(ids, weights=ao_lo[own_lo >= 0], minlength=nid)
@@ -6814,9 +6862,11 @@ UV_CFG = {
     "shape_q": 0.03,         # m: cuantización del contorno para decidir el lado largo de una isla
     "phase_step": 0.015,     # m: resolución de la fase del patrón (ladrillo) al comparar caras
     "geo_tol": 0.02,         # m: dos caras "iguales" pueden diferir esto en cada punto
-    "ao_dirs": 10,           # rayos por punto al comparar las sombras de dos caras
+    "ao_dirs": 12,           # rayos por punto al comparar las sombras de dos caras
+    "sig_fracs": (0.06, 0.5, 0.94),   # posiciones (fracción del ancho y del alto) de la grilla de la firma de sombra
     "ao_rot": 0.37,          # giro fijo de los rayos (para que dos contextos iguales den la misma firma)
     "share_max_area": 12.0,  # m²: las caras más grandes no comparten isla
+    "share_cont_walls": False,   # paños de pared que siguen en otra cara coplanar (dinteles, antepechos): False = no comparten, se funden con la pared
     "crop_max_area": 40.0,   # m²: tope para que una tira use un tramo de otra
     "crop_rect_tol": 0.03,   # proporción de error para considerar rectangular una cara
     "crop_h_tol": 0.02,      # m: diferencia de alto admitida entre tiras
@@ -6937,7 +6987,8 @@ class _Unwrapper:
         allp = [[(a - mn0, b - mn1) for a, b in pts] for pts in allp]
         w, h = max(a for pts in allp for a, _b in pts), max(b for pts in allp for _a, b in pts)
         w, h = max(w, 0.02), max(h, 0.02)
-        if round(h / q) > round(w / q):          # el lado largo en horizontal
+        rot = round(h / q) > round(w / q)
+        if rot:                                  # el lado largo en horizontal
             allp = [[(b, w - a) for a, b in pts] for pts in allp]
             w, h = h, w
         P0 = pinfo[members[0]]
@@ -6950,7 +7001,7 @@ class _Unwrapper:
             area2 = sum(pts[i][0] * pts[(i + 1) % len(pts)][1] - pts[(i + 1) % len(pts)][0] * pts[i][1] for i in range(len(pts)))
             key = (P0["mat"], P0["cls"], P0["phase"], area2 > 0, len(pts), P0["pri"], P0.get("lod", 0))
         return {"pi": members[0], "parts": list(zip(members, allp)), "w": w, "h": h, "key": key, "wt": wt, "area": area,
-                "rep": members[0], "hid": P0["hid"], "geo": allp[0],
+                "rep": members[0], "hid": P0["hid"], "geo": allp[0], "rot": rot,
                 "roof": P0["mat"] == MAT["roof"] and P0["cls"] == 1}
 
     def build_items(self):
@@ -6964,28 +7015,81 @@ class _Unwrapper:
         return all(any(abs(a - c) <= gtol and abs(b - d) <= gtol for c, d in B["geo"]) for a, b in A["geo"]) and \
             all(any(abs(a - c) <= gtol and abs(b - d) <= gtol for a, b in A["geo"]) for c, d in B["geo"])
 
-    def ao_sig(self, it):
-        """Firma de sombra de una cara: la oclusión en su centro y cerca de cada esquina (vértices en orden canónico)."""
+    def _plane_frame(self, poly):
+        """(origen, eje u, eje v) del plano de una cara: u a lo largo de la pared (o x), v hacia arriba (o y), origen en la esquina mínima."""
+        from mathutils import Vector as _V
         me = self.me
-        poly = me.polygons[it["pi"]]
-        bvh = self.bvhs[self.pinfo[it["pi"]].get("lod", 0)] if self.bvhs else self.bvh      # la sombra se mide en la malla de su propio LOD
         vs = [me.vertices[me.loops[li].vertex_index].co for li in poly.loop_indices]
-        if abs(poly.normal.z) < 0.7:
-            from mathutils import Vector as _V
-            t_ = _V((0, 0, 1)).cross(poly.normal)
-            vs.sort(key=lambda v_: (round(v_.z / 0.02), round(v_.dot(t_) / 0.02)))
+        n = poly.normal
+        if abs(n.z) < 0.7:
+            u = _V((0, 0, 1)).cross(n)
+            u = u.normalized() if u.length > 1e-9 else _V((1, 0, 0))
+            v = _V((0, 0, 1))
         else:
-            vs.sort(key=lambda v_: (round(v_.x / 0.02), round(v_.y / 0.02)))
-        c = poly.center
-        spots = [c] + [c * 0.5 + vs[(k * len(vs)) // 4] * 0.5 for k in range(4)]
-        return [_ao_at(bvh, self.dirs, s_, poly.normal, self.dist, UV_CFG["ao_rot"]) for s_ in spots]
+            u, v = _V((1, 0, 0)), _V((0, 1, 0))
+        a0 = min(q.dot(u) for q in vs)
+        b0 = min(q.dot(v) for q in vs)
+        p0 = vs[0]
+        return p0 - u * (p0.dot(u) - a0) - v * (p0.dot(v) - b0), u, v
+
+    def ao_at_offsets(self, it, offs):
+        """Oclusión en puntos de la cara dados en metros desde su esquina mínima (u a lo largo, v hacia arriba)."""
+        poly = self.me.polygons[it["pi"]]
+        bvh = self.bvhs[self.pinfo[it["pi"]].get("lod", 0)] if self.bvhs else self.bvh      # la sombra se mide en la malla de su propio LOD
+        o, u, v = self._plane_frame(poly)
+        return [_ao_at(bvh, self.dirs, o + u * du + v * dv, poly.normal, self.dist, UV_CFG["ao_rot"]) for du, dv in offs]
+
+    def ao_sig(self, it, w=None, h=None):
+        """Firma de sombra de una cara: la oclusión en una grilla de 3 x 3 puntos que llega cerca de los bordes (ahí es donde cambia por
+        un balcón, una cornisa o una ventana vecina). `w`, `h`: medidas de la zona a medir (por defecto, toda la cara)."""
+        w = it["w"] if w is None else w
+        h = it["h"] if h is None else h
+        fr = UV_CFG["sig_fracs"]
+        offs = [(w * fu, h * fv) for fv in fr for fu in fr]          # en las coordenadas de la isla (lado largo en horizontal)
+        if it.get("rot"):                     # la isla está girada respecto de la cara: a = alto_isla - b', b = a'
+            offs = [(it["h"] - dv, du) for du, dv in offs]
+        return self.ao_at_offsets(it, offs)
+
+    def continuing_walls(self):
+        """Caras de pared del LOD0 que siguen en otra cara coplanar del mismo material (el paño entre ventanas, el dintel,
+        el antepecho). Si compartieran isla con una gemela de otro piso, la sombra y el ladrillo quedarían cortados en cada borde
+        (un rectángulo de otro tono): se dejan sin compartir para que `merge_free` las funda con su pared en una sola isla."""
+        if UV_CFG["share_cont_walls"]:
+            return set()
+        me, pinfo, c = self.me, self.pinfo, UV_CFG
+        walls = {MAT["facade"], MAT["facb"], MAT["facc"], MAT["facd"]}
+        e2p = {}
+        for i, P in pinfo.items():
+            if P["mat"] in walls and P.get("lod", 0) == 0 and P["cls"] != 2:
+                for li in me.polygons[i].loop_indices:
+                    e2p.setdefault(me.loops[li].edge_index, []).append(i)
+        out = set()
+        for pl in e2p.values():
+            if len(pl) != 2:
+                continue
+            i, j = pl
+            A, B = pinfo[i], pinfo[j]
+            if A["mat"] != B["mat"] or A["cls"] != B["cls"] or A["hid"] != B["hid"]:
+                continue
+            pi_, pj_ = me.polygons[i], me.polygons[j]
+            if pi_.normal.dot(pj_.normal) < c["merge_dot"]:
+                continue
+            vj = me.vertices[me.loops[pj_.loop_start].vertex_index].co
+            vi = me.vertices[me.loops[pi_.loop_start].vertex_index].co
+            if abs((vj - vi).dot(pi_.normal)) > c["merge_plane"]:
+                continue
+            out.update((i, j))
+        return out
 
     def share_equal(self):
         """Caras con el mismo material, contorno, fase de patrón y sombra usan la misma isla."""
         self.bvh = self.bvhs[0] if self.bvhs else _occluder_bvh(self.me)
         self.dirs = _hammersley_dirs(UV_CFG["ao_dirs"])
+        self.cont = self.continuing_walls()
         groups = {}
         for it in self.items:
+            if it["pi"] in self.cont:
+                continue
             groups.setdefault(it["key"], []).append(it)
         clusters = []
         for key, mem0 in groups.items():
@@ -7024,6 +7128,8 @@ class _Unwrapper:
         for it in self.items:
             if it["rep"] != it["pi"] or len(it["parts"]) != 1 or len(it["geo"]) != 4 or it["key"][0] == "grp":
                 continue
+            if it["pi"] in self.cont:
+                continue
             if abs(it["w"] * it["h"] - it["area"]) > c["crop_rect_tol"] * it["area"] or it["area"] > c["crop_max_area"]:
                 continue
             cg.setdefault((it["key"][0], it["key"][1], it["key"][2], it["hid"]), []).append(it)
@@ -7039,9 +7145,8 @@ class _Unwrapper:
                     if abs(r_it["h"] - it["h"]) <= c["crop_h_tol"] and it["w"] <= r_it["w"] + c["crop_h_tol"]:
                         if sg is None:
                             sg = self.ao_sig(it)
-                        if r_sg is None:
-                            r_sg = self.ao_sig(r_it)
-                        if abs(sum(sg) / len(sg) - sum(r_sg) / len(r_sg)) <= self.loose:
+                        r_sg = self.ao_sig(r_it, it["w"], it["h"])       # el tramo de la larga que va a usar la corta
+                        if max(abs(a_ - b_) for a_, b_ in zip(sg, r_sg)) <= self.loose:
                             it["rep"] = r_it["pi"]
                             self.n_share += 1
                             break
@@ -7856,7 +7961,7 @@ def bake_ao_all(context, p, objs, progress=None):
         me["cs2_bake_margin"] = int(p.get("bake_margin", 8))
         size = int(d["info"].get("tam", sizes[min(lod, 2)]))
         ao = compute_ao_map(me, "CS2_unique", size, float(p.get("bake_dist", 2.5)),
-                            max(4, int(p.get("bake_samples", 32))), only=only)
+                            max(4, int(p.get("bake_samples", 32))), only=only, refine=lod == 0)
         store_ao(name, lod, ao, d["uid"])
         me["cs2_assigned"] = ""
 

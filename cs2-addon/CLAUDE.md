@@ -1,6 +1,6 @@
 # CS2 Generador de Edificios (add-on de Blender)
 
-Add-on de un solo archivo (`cs2_edificio_addon.py`, v2.85, ~16 700 líneas) que genera edificios low-poly
+Add-on de un solo archivo (`cs2_edificio_addon.py`, v2.86, ~16 700 líneas) que genera edificios low-poly
 para Cities: Skylines 2 (y CS1) con LODs, UV, texturas y exportación FBX. Blender 4.2+.
 
 ## Cómo trabajar con Leo
@@ -111,6 +111,17 @@ para Cities: Skylines 2 (y CS1) con LODs, UV, texturas y exportación FBX. Blend
 - Medido (bpy 5.2.1): total UV+sombras+texturas 22,0→14,4 s (L 5 pisos), 23,3→15,3 s, 27,6→17,8 s; texturas 11-12 s → 3,3-4,6 s.
 - Sombras (`compute_ao_map`): el muestreo adaptativo (8 rayos de prueba) ahorra ~26 % pero deja puntos con hasta 27 % de error: descartado.
 
+## Sombra pareja en la fachada (v2.86)
+- Leo vio rectángulos de otro tono en la pared horneada. Causa principal: el ARMADO de la UV. Los paños de pared continuos (dintel, antepecho,
+  entre ventanas) compartían isla con gemelos de otro piso y quedaban como islas sueltas entre paños fundidos: heredaban otra sombra y cortaban
+  el ladrillo. `_Unwrapper.continuing_walls()` los excluye de `share_equal`/`share_crops` (`UV_CFG["share_cont_walls"]`) y `merge_free` los
+  funde con su pared. Cuesta nitidez (34 → 28 px/m en la BOX de prueba) y elimina el defecto.
+- Segunda causa: la grilla gruesa de rayos (1 punto cada 4 x 4 texels) deja manchas junto a marcos y balcones. En el LOD0 la grilla usa el doble
+  de rayos y se lanzan rayos por texel donde el salto entre muestras vecinas de la misma cara supera `AO_REFINE_JUMP` (0,2) o la cara tiene
+  menos de `AO_REFINE_SMALL` muestras. Error contra la sombra exacta (`tools/seams.py`): 0,055 → 0,030; puntos con error > 0,1: 13 % → 4 %.
+  Las sombras tardan más (≈ 9 → 22 s en esa BOX). Prueba `ao_homog`.
+- `tools/seams.py` (error contra la sombra exacta) y `tools/render_horneado.py <salida> [fuerza] [--liso] [--sin-compartir]` para revisarlo.
+
 ## Herramientas de revisión (headless)
 - `tools/hojas_componentes.py <carpeta> <window|door|balcony>`: hojas de contacto con todos los estilos incluidos.
 - `tools/render_edificio.py <salida.png> [giro] [giro_pared_frontal]`: edificio con ladrillo y vista rápida para ver el giro.
@@ -118,7 +129,7 @@ para Cities: Skylines 2 (y CS1) con LODs, UV, texturas y exportación FBX. Blend
 - `comp.py` es una copia vieja del bloque de componentes que ya vive dentro de `cs2_edificio_addon.py`: no se importa en ningún lado.
 
 ## Estado y pendientes
-- 53/53 pruebas OK en v2.85 con bpy 5.2.1 (Python 3.13, la versión de Leo; ya no hace falta probar en 4.5). `perf_big` con `CS2_PERF_SCALE`.
+- 54/54 pruebas OK en v2.86 con bpy 5.2.1 (Python 3.13, la versión de Leo; ya no hace falta probar en 4.5). `perf_big` con `CS2_PERF_SCALE`.
 - Tipos de fachada (v2.82): `FACADE_TYPES`/`FACADE_BASE` + `cs2.facade_type`, botones en `CS2_PT_comp` (Personalizar). Prueba `facade_types`.
 - `tools/ui_dump.py`: vuelca como texto lo que muestra cada pestaña (auditoría de la interfaz sin abrir Blender).
 - Cierre de Blender 5.2.1 reportado por Leo (2026-10-28): dentro del deshacer (`ED_undo_operator_repeat` → `memfile_undo_decode`)
