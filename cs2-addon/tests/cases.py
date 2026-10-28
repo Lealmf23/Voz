@@ -78,7 +78,8 @@ def case_uv_bake():
 
 
 def _overlap_pct(me, uv_name="CS2_unique", res=1024):
-    """% de texels cubiertos por islas DISTINTAS (las gemelas se superponen a propósito y no cuentan)."""
+    """% de texels cubiertos por islas DISTINTAS (las gemelas se superponen a propósito y no cuentan).
+    Cada cara se achica un texel: dos caras vecinas de una misma isla fundida comparten el borde y no es un solape."""
     import numpy as np
     from PIL import Image, ImageDraw
     reps = list(me["cs2_reps"])
@@ -89,7 +90,9 @@ def _overlap_pct(me, uv_name="CS2_unique", res=1024):
             continue
         img = Image.new("L", (res, res), 0)
         ImageDraw.Draw(img).polygon([(layer[li].uv[0] * res, (1 - layer[li].uv[1]) * res) for li in poly.loop_indices], fill=1)
-        count += np.asarray(img, np.uint8)
+        m = np.asarray(img, np.uint8)
+        m = m[1:-1, 1:-1] & m[:-2, 1:-1] & m[2:, 1:-1] & m[1:-1, :-2] & m[1:-1, 2:]
+        count[1:-1, 1:-1] += m
     return float((count > 1).sum()) / float((count > 0).sum()) * 100.0
 
 

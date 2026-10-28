@@ -1,38 +1,38 @@
 {
  "L-LOD0": {
-  "islas": 400,
-  "px_por_m": 23.1,
-  "uso": 66.9,
-  "compartidas": 5384
+  "islas": 391,
+  "px_por_m": 20.9,
+  "uso": 73.2,
+  "compartidas": 5218
  },
  "L-LOD1": {
-  "islas": 400,
-  "px_por_m": 8.1,
-  "uso": 66.9,
-  "compartidas": 5384
+  "islas": 391,
+  "px_por_m": 7.3,
+  "uso": 73.2,
+  "compartidas": 5218
  },
  "L-LOD2": {
   "islas": 16,
   "px_por_m": 11.1,
-  "uso": 66.6,
+  "uso": 67.1,
   "compartidas": 62
  },
  "U-LOD0": {
-  "islas": 518,
-  "px_por_m": 16.4,
-  "uso": 58.2,
-  "compartidas": 10935
+  "islas": 494,
+  "px_por_m": 14.6,
+  "uso": 69.1,
+  "compartidas": 10560
  },
  "U-LOD1": {
-  "islas": 518,
-  "px_por_m": 5.7,
-  "uso": 58.2,
-  "compartidas": 10935
+  "islas": 494,
+  "px_por_m": 5.1,
+  "uso": 69.1,
+  "compartidas": 10560
  },
  "U-LOD2": {
-  "islas": 17,
+  "islas": 21,
   "px_por_m": 8.0,
-  "uso": 70.7,
-  "compartidas": 103
+  "uso": 71.7,
+  "compartidas": 99
  }
 }
