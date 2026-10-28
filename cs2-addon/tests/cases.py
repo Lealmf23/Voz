@@ -2195,6 +2195,9 @@ def case_facade_types():
             seen.append(idname)
             return _FakeLayout()
 
+        def panel(self, *a_, **k_):
+            return Rec(), Rec()
+
         def __getattr__(self, n):
             if n.startswith("__"):
                 raise AttributeError(n)
