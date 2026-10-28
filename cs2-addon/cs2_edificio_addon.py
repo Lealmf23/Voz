@@ -9,7 +9,7 @@ Después: Vista 3D > tecla N > pestaña "CS2".
 bl_info = {
     "name": "CS2 Generador de Edificios",
     "author": "Leo",
-    "version": (2, 82, 0),
+    "version": (2, 83, 0),
     "blender": (4, 2, 0),
     "location": "Vista 3D > Barra lateral (N) > CS2",
     "description": "Edificios low-poly de todo tipo (residencial, comercial, oficinas, industrial, servicios y emblemáticos) con LODs y FBX para Cities: Skylines 2",
@@ -9402,6 +9402,35 @@ def _pbr_preview_changed(self, context):
         log_error("vista_rapida", e)
 
 
+_AUTO = {"t": 0.0}
+
+
+def _auto_refresh_schedule():
+    """Rehace el edificio un ratito después del último cambio (si llegan varios cambios seguidos, una sola vez)."""
+    _AUTO["t"] = time.time()
+    try:
+        if not bpy.app.timers.is_registered(_auto_refresh_tick):
+            bpy.app.timers.register(_auto_refresh_tick, first_interval=0.4)
+    except Exception:
+        _log_exc("auto_refresh_registro")
+
+
+def _auto_refresh_tick():
+    if time.time() - _AUTO["t"] < 0.35:
+        return 0.15
+    if _GEN["busy"] or not _PENDING[0]:
+        return None
+    try:
+        s = bpy.context.scene.cs2_building
+        if _main_obj(s) is not None and s.auto_refresh:
+            regenerate(bpy.context, live=True)
+            _PENDING[0] = False
+            _redraw_all()
+    except Exception as e:
+        log_error("actualizar_solo", e)
+    return None
+
+
 def _on_change(self, context):
     if _ROOF_LOCK[0] or _GEN["busy"]:
         return
@@ -9409,6 +9438,8 @@ def _on_change(self, context):
         _PENDING[0] = True
         if getattr(self, "pbr_preview", False):
             _quick_schedule()
+        if getattr(self, "auto_refresh", False):
+            _auto_refresh_schedule()
     # no se regenera solo: el edificio se rehace con el botón «Actualizar edificio» (la opción «en vivo» se retiró)
 
 
@@ -9733,6 +9764,8 @@ class CS2BuildingProps(bpy.types.PropertyGroup):
                                    ("off", "Siempre apagadas", "Todas usan el color 'siempre apagada'")])
     tex_size: EnumProperty(name="Tamaño de textura (Texture size)", default="1024",
                            items=[("512", "512", ""), ("1024", "1024", ""), ("2048", "2048", ""), ("4096", "4096", "")])
+    auto_refresh: BoolProperty(name="Actualizar solo", default=True,
+                               description="Rehace el edificio un momento después de cada cambio en los componentes (si está apagado, usá «Actualizar edificio»)")
     live_update: BoolProperty(name="Actualizar en vivo (se regenera solo al cambiar algo)", default=False,
                               description="Si está apagado, el edificio solo cambia al hacer clic en Generar")
     clean_on_generate: BoolProperty(name="Optimizar al generar (quitar caras ocultas)", default=True,
@@ -10204,6 +10237,16 @@ def _pbr_grid_apply(self, context):
     _on_change(self, context)
 
 
+def _ms_expand_update(slot):
+    """Acordeón: al abrir un material se cierran los demás (la pestaña Texturas queda corta)."""
+    def upd(self, context):
+        if getattr(self, f"ms_{slot}_expanded"):
+            for o in PBR_SLOTS:
+                if o != slot and getattr(self, f"ms_{o}_expanded", False):
+                    setattr(self, f"ms_{o}_expanded", False)
+    return upd
+
+
 def _install_matslot_props():
     ba = CS2BuildingProps.__annotations__
     for sl in PBR_SLOTS:
@@ -10211,7 +10254,7 @@ def _install_matslot_props():
         d = dict(SLOT_DEFAULTS)
         d["gloss"] = ATLAS_GLOSS.get(sl, 0.15)
         d["snow"] = sl != "roof"
-        ba[f"ms_{sl}_expanded"] = BoolProperty(name=lab, default=(sl == "facade"))
+        ba[f"ms_{sl}_expanded"] = BoolProperty(name=lab, default=(sl == "facade"), update=_ms_expand_update(sl))
         ba[f"ms_{sl}_mode"] = EnumProperty(name="Fuente", default="FLAT", update=_on_change,
                                            items=[("FLAT", "Color liso", "Usa el color de 'Medidas' y los valores de abajo"),
                                                   ("PBR", "Texturas", "Mapas de imagen (difuso, normal, rugosidad...)")])
@@ -12978,34 +13021,6 @@ class CS2_PT_forma(bpy.types.Panel):
         ui_note(lay, "Cuando algo cambie, el botón «Actualizar edificio» también está arriba, en la barra de la vista 3D.")
 
 
-class CS2_PT_estilos(bpy.types.Panel):
-    bl_label = "Mis estilos (guardar y cargar)"
-    bl_idname = "CS2_PT_estilos"
-    poll = _tab_poll("PERS")
-    bl_space_type = "VIEW_3D"
-    bl_region_type = "UI"
-    bl_category = "CS2"
-
-    def draw(self, context):
-        lay = self.layout
-        ui_note(lay, "Elegís y ajustás los estilos dentro de la ventana de cada componente (Ventana, Puerta, Balcón).")
-        row = lay.row(align=True)
-        row.operator("cs2.style_catalog", text="Ver catálogo", icon="OUTLINER_COLLECTION")
-        row.operator("cs2.thumbs_all", text="", icon="IMAGE_DATA")
-        box = lay.box()
-        lib_ensure()
-        box.label(text=f"{len(_LIB['user'])} propios · {len(_LIB['names'])} en total", icon="FILE_FOLDER")
-        d = style_dir()
-        if d:
-            box.label(text=d if len(d) < 42 else "…" + d[-40:])
-        row = box.row(align=True)
-        row.operator("cs2.style_folder", icon="FILEBROWSER")
-        row.operator("cs2.style_reload", text="Recargar", icon="FILE_REFRESH")
-        row = box.row(align=True)
-        row.operator("cs2.style_export", text="Exportar", icon="EXPORT")
-        row.operator("cs2.style_import", text="Importar", icon="IMPORT")
-
-
 class CS2_OT_roof_apply(bpy.types.Operator):
     bl_idname = "cs2.roof_apply"
     bl_label = "Aplicar este techo a las caras elegidas"
@@ -13251,49 +13266,6 @@ class CS2_OT_porch(bpy.types.Operator):
         return {"FINISHED"}
 
 
-class CS2_PT_porche(bpy.types.Panel):
-    bl_label = "Porche"
-    bl_idname = "CS2_PT_porche"
-    bl_parent_id = "CS2_PT_extras"
-    bl_space_type = "VIEW_3D"
-    bl_region_type = "UI"
-    bl_category = "CS2"
-
-    def draw(self, context):
-        s = context.scene.cs2_building
-        lay = self.layout
-        if not _scope_gate(lay, context, s):
-            return
-        _refresh_btn(lay)
-        col = lay.column(align=True)
-        col.label(text="Modelo")
-        ks = list(PORCH_PRESETS)
-        for i in range(0, len(ks), 2):
-            row = col.row(align=True)
-            for k in ks[i:i + 2]:
-                row.operator("cs2.porch_preset", text=PORCH_PRESETS[k][0]).kind = k
-        if s.edit_scope == "ALL":
-            lay.prop(s, "por_on_g")
-            box = lay.box()
-            box.enabled = s.por_on_g
-            box.prop(s, "por_walls_g", text="")
-            tgt, suf = s, "_g"
-        else:
-            w = context.scene.cs2_wall
-            lay.prop(w, "use_por")
-            box = lay.box()
-            box.enabled = w.use_por
-            box.prop(w, "por_on", text="")
-            tgt, suf = w, ""
-        for k in ("roof", "rail", "enc", "stp", "lv"):
-            box.prop(tgt, f"por_{k}{suf}")
-        for k in PORCH_NUMS:
-            box.prop(tgt, f"por_{k}{suf}")
-        for k in ("dmat", "pmat"):
-            box.prop(tgt, f"por_{k}{suf}")
-        lay.label(text="Dos niveles: el techo va arriba. Costados: 'Frente y costados'.", icon="INFO")
-
-
 def _refresh_btn(lay):
     lay.operator("cs2.refresh", icon="FILE_REFRESH")
 
@@ -13359,297 +13331,6 @@ def _face_diagnosis(lay, context, s):
             box.label(text=f"Tiene {len(f.verts)} lados: las aberturas solo entran en tramos rectos.", icon="ERROR")
     except Exception:
         _log_exc("_face_diagnosis")
-
-
-class CS2_PT_pers(bpy.types.Panel):
-    bl_label = "Qué se edita"
-    bl_idname = "CS2_PT_pers"
-    bl_space_type = "VIEW_3D"
-    bl_region_type = "UI"
-    bl_category = "CS2"
-
-    poll = _tab_poll("PERS")
-
-    def draw(self, context):
-        s = context.scene.cs2_building
-        ui_note(self.layout, "Todo lo que se puede cambiar: fachada, techo y extras.")
-        ui_note(self.layout, "Se ve con colores lisos; las texturas vienen después (pestaña 3).")
-        _draw_scope(self.layout, context, s)
-
-
-class CS2_PT_alcance(bpy.types.Panel):
-    bl_label = "Fachada"
-    bl_idname = "CS2_PT_alcance"
-    bl_space_type = "VIEW_3D"
-    bl_region_type = "UI"
-    bl_category = "CS2"
-
-    poll = _tab_poll("PERS")
-
-    def draw(self, context):
-        self.layout.label(text="Ventanas, puertas, balcones, paredes y colores.")
-
-
-class CS2_PT_extras(bpy.types.Panel):
-    bl_label = "Extras"
-    bl_idname = "CS2_PT_extras"
-    bl_space_type = "VIEW_3D"
-    bl_region_type = "UI"
-    bl_category = "CS2"
-
-    poll = _tab_poll("PERS")
-
-    def draw(self, context):
-        self.layout.label(text="Variantes, lotes y tus propios modelos.")
-
-
-class CS2_PT_win(bpy.types.Panel):
-    bl_label = "Ventanas"
-    bl_idname = "CS2_PT_win"
-    bl_parent_id = "CS2_PT_alcance"
-    bl_space_type = "VIEW_3D"
-    bl_region_type = "UI"
-    bl_category = "CS2"
-
-    def draw(self, context):
-        s = context.scene.cs2_building
-        lay = self.layout
-        if not _scope_gate(lay, context, s):
-            return
-        _refresh_btn(lay)
-        if s.edit_scope == "ALL":
-            draw_style_picker(lay, s, "window_style", "building")
-            col = lay.column(align=True)
-            for name in ("win_w", "win_h", "win_sill", "win_depth"):
-                col.prop(s, name)
-        else:
-            w = context.scene.cs2_wall
-            draw_style_picker(lay, w, "win_style", "wall")
-            lay.prop(w, "use_win")
-            col = lay.column(align=True)
-            col.enabled = w.use_win
-            col.prop(w, "win_auto")
-            sub = col.column(align=True)
-            sub.enabled = not w.win_auto
-            sub.prop(w, "win_count")
-            if not w.win_auto and w.win_count == 0:
-                col.label(text="Sin ventanas en las caras elegidas", icon="INFO")
-            for name in ("win_w", "win_h", "win_sill", "win_depth", "win_off"):
-                col.prop(w, name)
-            lay.operator("cs2.wall_reset", icon="X")
-        _draw_editor(lay.box(), s, context.scene.cs2_style, "window")
-
-
-class CS2_PT_door(bpy.types.Panel):
-    bl_label = "Puertas"
-    bl_idname = "CS2_PT_door"
-    bl_parent_id = "CS2_PT_alcance"
-    bl_space_type = "VIEW_3D"
-    bl_region_type = "UI"
-    bl_category = "CS2"
-
-    def draw(self, context):
-        s = context.scene.cs2_building
-        lay = self.layout
-        if not _scope_gate(lay, context, s):
-            return
-        _refresh_btn(lay)
-        if s.edit_scope == "ALL":
-            draw_style_picker(lay, s, "door_style", "building")
-            col = lay.column(align=True)
-            col.prop(s, "door_w_g")
-            col.prop(s, "door_h_g")
-            ui_note(lay, "La puerta va en el frente, planta baja (en caras elegidas podés mover o sacar).")
-        else:
-            w = context.scene.cs2_wall
-            draw_style_picker(lay, w, "door_style_w", "wall")
-            lay.prop(w, "door_mode")
-            if w.door_mode != "2":
-                lay.prop(w, "use_door")
-                col = lay.column(align=True)
-                col.enabled = w.use_door
-                for name in ("door_pos", "door_off", "door_w", "door_h", "door_depth"):
-                    col.prop(w, name)
-        _draw_editor(lay.box(), s, context.scene.cs2_style, "door")
-
-
-class CS2_PT_cw(bpy.types.Panel):
-    bl_label = "Muro cortina (vidrio)"
-    bl_idname = "CS2_PT_cw"
-    bl_parent_id = "CS2_PT_alcance"
-    bl_space_type = "VIEW_3D"
-    bl_region_type = "UI"
-    bl_category = "CS2"
-
-    @classmethod
-    def poll(cls, context):
-        return bool(context.scene.cs2_building.studio_adv)
-
-    def draw(self, context):
-        s = context.scene.cs2_building
-        lay = self.layout
-        if not _scope_gate(lay, context, s):
-            return
-        lay.label(text="Cuadrícula de vidrio con perfiles. Reemplaza ventanas,", icon="MOD_WIREFRAME")
-        lay.label(text="puertas y balcones de la pared.")
-        if s.edit_scope == "ALL":
-            lay.prop(s, "cw_on_g")
-            box = lay.box()
-            col = box.column(align=True)
-            col.enabled = s.cw_on_g
-            col.label(text="Módulo de vidrio")
-            col.prop(s, "cw_mw_g")
-            col.prop(s, "cw_mh_g")
-            col.label(text="Perfiles")
-            col.prop(s, "cw_pt_g")
-            col.prop(s, "cw_pd_g")
-            col.prop(s, "cw_mmat_g")
-            col.label(text="Banda opaca entre pisos")
-            col.prop(s, "cw_band_g")
-            col.prop(s, "cw_bmat_g")
-            col.label(text="Márgenes y aletas")
-            col.prop(s, "cw_edge_g")
-            col.prop(s, "cw_finn_g")
-            if s.cw_finn_g > 0:
-                col.prop(s, "cw_find_g")
-                col.prop(s, "cw_fint_g")
-                col.prop(s, "cw_fmat_g")
-        else:
-            w = context.scene.cs2_wall
-            lay.prop(w, "cw_mode")
-            box = lay.box()
-            box.prop(w, "use_cw")
-            col = box.column(align=True)
-            col.enabled = w.use_cw
-            for name in ("cw_mw", "cw_mh", "cw_pt", "cw_pd", "cw_mmat", "cw_band", "cw_bmat", "cw_edge", "cw_finn"):
-                col.prop(w, name)
-            if w.cw_finn > 0:
-                for name in ("cw_find", "cw_fint", "cw_fmat"):
-                    col.prop(w, name)
-
-
-class CS2_PT_rev(bpy.types.Panel):
-    bl_label = "Paredes: acabados y detalles"
-    bl_idname = "CS2_PT_rev"
-    bl_parent_id = "CS2_PT_alcance"
-    bl_space_type = "VIEW_3D"
-    bl_region_type = "UI"
-    bl_category = "CS2"
-
-    def draw(self, context):
-        s = context.scene.cs2_building
-        lay = self.layout
-        if not _scope_gate(lay, context, s):
-            return
-        _refresh_btn(lay)
-        if s.edit_scope == "ALL":
-            row = lay.row(align=True)
-            for k, v in LOOK_PRESETS.items():
-                row.operator("cs2.look", text=v[0].replace("Casa moderna: ", ""), icon="HOME").look = k
-            box = lay.box()
-            box.label(text="Materiales", icon="MATERIAL")
-            box.prop(s, "wall_mat_g")
-            sl_ = ("facade", "facb", "facc", "facd")[min(max(int(s.wall_mat_g), 1), 4) - 1]
-            rr = box.row(align=True)         # el giro de la textura del material elegido, a mano
-            rr.prop(s, f"ms_{sl_}_rot", text="Giro de su textura")
-            for lab_, d_ in (("-90°", -90.0), ("+90°", 90.0)):
-                op = rr.operator("cs2.slot_rot", text=lab_)
-                op.slot, op.delta = sl_, d_
-            box.prop(s, "ground_mat_g")
-            if s.ground_mat_g != "0":
-                box.prop(s, "ground_n_g")
-            box.prop(s, "frm_mat_g")
-            box = lay.box()
-            box.label(text="Paños de color y crujías", icon="MATERIAL")
-            box.prop(s, "pan_mode_g", text="")
-            if s.pan_mode_g != "1":
-                box.prop(s, "pan_mat_g")
-                box.prop(s, "pan_pad_g")
-                if s.pan_mode_g in ("2", "9"):
-                    box.prop(s, "pan_prob_g")
-            box = lay.box()
-            box.label(text="Marcos salientes en ventanas", icon="MOD_WIREFRAME")
-            box.prop(s, "cas_w_g")
-            if s.cas_w_g > 0:
-                box.prop(s, "cas_d_g")
-                box.prop(s, "cas_mat_g")
-            box = lay.box()
-            box.label(text="Lamas (madera, aluminio)", icon="LINENUMBERS_ON")
-            box.prop(s, "slt_mode_g", text="")
-            if s.slt_mode_g != "0":
-                for name in ("slt_gap_g", "slt_w_g", "slt_d_g", "slt_mat_g"):
-                    box.prop(s, name)
-            for key, g in NEW_GROUPS.items():
-                box = lay.box()
-                box.label(text=g["label"], icon=g["icon"])
-                box.prop(s, f"{key}_on_g", text="")
-                if getattr(s, f"{key}_on_g") != "0":
-                    for k in [k for k in g["ints"] if k != "on"] + list(g["floats"]):
-                        box.prop(s, f"{key}_{k}_g")
-        else:
-            w = context.scene.cs2_wall
-            box = lay.box()
-            box.label(text="Textura de las paredes elegidas", icon="MATERIAL")
-            box.prop(w, "f_mat")
-            box.prop(w, "f_rot", expand=True)
-            row = box.row(align=True)
-            row.label(text="Elegir las del material:")
-            for k_, lab_ in (("1", "A"), ("2", "B"), ("3", "C"), ("4", "D")):
-                row.operator("cs2.sel_wall_mat", text=lab_).mat = k_
-            for use, names, title in (("use_pan", ("pan_mode", "pan_mat", "pan_pad", "pan_prob"), "Paños de color y crujías"),
-                                      ("use_cas", ("cas_w", "cas_d", "cas_mat"), "Marcos salientes"),
-                                      ("use_slt", ("slt_mode", "slt_gap", "slt_w", "slt_d", "slt_mat"), "Lamas"),
-                                      *[(g["use"], tuple(f"{key}_{k}" for k in list(g["ints"]) + list(g["floats"])), g["label"])
-                                        for key, g in NEW_GROUPS.items()]):
-                box = lay.box()
-                box.prop(w, use, text=title)
-                col = box.column(align=True)
-                col.enabled = getattr(w, use)
-                for name in names:
-                    col.prop(w, name)
-
-
-class CS2_PT_bal(bpy.types.Panel):
-    bl_label = "Balcones"
-    bl_idname = "CS2_PT_bal"
-    bl_parent_id = "CS2_PT_alcance"
-    bl_space_type = "VIEW_3D"
-    bl_region_type = "UI"
-    bl_category = "CS2"
-
-    def draw(self, context):
-        s = context.scene.cs2_building
-        lay = self.layout
-        if not _scope_gate(lay, context, s):
-            return
-        _refresh_btn(lay)
-        if s.edit_scope == "ALL":
-            box = lay.box()
-            box.label(text="Dónde van")
-            box.prop(s, "balconies", text="")
-            if s.balconies == "random":
-                box.prop(s, "balcony_prob")
-            if s.balconies != "none":
-                box.prop(s, "balcony_walls")
-            draw_style_picker(lay, s, "balcony_style", "building")
-            if s.balcony_style in ("NONE", ""):
-                col = lay.column(align=True)
-                col.prop(s, "bal_depth_g")
-                col.prop(s, "bal_w_g")
-                col.prop(s, "bal_rail_g")
-            else:
-                ui_note(lay, "Con estilo, las medidas las define el editor de abajo.")
-        else:
-            w = context.scene.cs2_wall
-            lay.prop(w, "bal_mode")
-            if w.bal_mode != "1":
-                draw_style_picker(lay, w, "bal_style_w", "wall")
-                lay.prop(w, "use_bal")
-                col = lay.column(align=True)
-                col.enabled = w.use_bal
-                for name in ("bal_depth", "bal_w", "bal_rail", "bal_off"):
-                    col.prop(w, name)
-        _draw_editor(lay.box(), s, context.scene.cs2_style, "balcony")
 
 
 def _draw_roof_fields(lay, s):
@@ -13732,52 +13413,6 @@ def _draw_roof_fields(lay, s):
         box.prop(s, "r_chcap", text="")
 
 
-class CS2_PT_techo(bpy.types.Panel):
-    bl_label = "Techo"
-    bl_idname = "CS2_PT_techo"
-    bl_space_type = "VIEW_3D"
-    bl_region_type = "UI"
-    bl_category = "CS2"
-
-    poll = _tab_poll("PERS")
-
-    def draw(self, context):
-        s = context.scene.cs2_building
-        lay = self.layout
-        if not _scope_gate(lay, context, s):
-            return
-        _refresh_btn(lay)
-        if s.edit_scope == "FACES":
-            lay.label(text="Armá el techo y apretá Aplicar (el general no cambia).", icon="INFO")
-            row = lay.row(align=True)
-            row.operator("cs2.roof_apply", text="Aplicar a las caras", icon="CHECKMARK")
-            row.operator("cs2.roof_clear", text="Volver al general", icon="LOOP_BACK")
-        _draw_roof_fields(lay, s)
-
-
-class CS2_PT_cornisas(bpy.types.Panel):
-    bl_label = "Cornisas entre pisos"
-    bl_idname = "CS2_PT_cornisas"
-    bl_space_type = "VIEW_3D"
-    bl_region_type = "UI"
-    bl_category = "CS2"
-
-    poll = _tab_poll("PERS")
-
-    def draw(self, context):
-        s = context.scene.cs2_building
-        lay = self.layout
-        lay.label(text="Valen para todo el edificio.", icon="HOME")
-        lay.prop(s, "string_courses")
-        if s.string_courses:
-            box = lay.box()
-            box.prop(s, "string_style")
-            box.prop(s, "string_h")
-            box.prop(s, "string_out")
-            box.prop(s, "string_z")
-            box.prop(s, "string_every")
-
-
 class CS2_PT_colores(bpy.types.Panel):
     bl_label = "Colores"
     bl_idname = "CS2_PT_colores"
@@ -13804,54 +13439,6 @@ class CS2_PT_colores(bpy.types.Panel):
         col.prop(s, "mat_b_color", text="B · ladrillo")
         col.prop(s, "mat_c_color", text="C · gris oscuro")
         col.prop(s, "mat_d_color", text="D · madera")
-
-
-class CS2_PT_variacion(bpy.types.Panel):
-    bl_label = "Variantes y lotes"
-    bl_idname = "CS2_PT_variacion"
-    bl_parent_id = "CS2_PT_extras"
-    bl_space_type = "VIEW_3D"
-    bl_region_type = "UI"
-    bl_category = "CS2"
-
-    def draw(self, context):
-        s = context.scene.cs2_building
-        lay = self.layout
-        row = lay.row(align=True)
-        row.prop(s, "seed")
-        row.operator("cs2.random_seed", text="", icon="FILE_REFRESH")
-        lay.prop(s, "variation")
-        box = lay.box()
-        box.label(text="Lote de edificios", icon="OUTLINER_COLLECTION")
-        box.prop(s, "batch_count")
-        box.prop(s, "batch_spacing")
-        box.prop(s, "batch_export")
-        box.operator("cs2.batch", icon="DUPLICATE")
-
-
-class CS2_PT_piezas(bpy.types.Panel):
-    bl_label = "Usar mis propios modelos"
-    bl_idname = "CS2_PT_piezas"
-    bl_parent_id = "CS2_PT_extras"
-    bl_space_type = "VIEW_3D"
-    bl_region_type = "UI"
-    bl_category = "CS2"
-
-    @classmethod
-    def poll(cls, context):
-        return bool(context.scene.cs2_building.studio_adv)
-
-    def draw(self, context):
-        s = context.scene.cs2_building
-        lay = self.layout
-        lay.label(text="Mallas tuyas de 2 m x 2 m")
-        lay.prop(s, "window_collection")
-        lay.prop(s, "door_collection")
-        nw, nd = _count_pieces(s.window_collection), _count_pieces(s.door_collection)
-        if nw or nd:
-            lay.label(text=f"{nw} ventana(s), {nd} puerta(s)")
-            lay.prop(s, "piece_random")
-        lay.operator("cs2.sample_pieces", icon="ADD")
 
 
 def _redraw_ui():
@@ -16216,7 +15803,7 @@ def _make_component(spec):
 
     def invoke(self, context, event):
         _comp_invoke_state(self, context, spec)
-        return self.execute(context)
+        return context.window_manager.invoke_props_dialog(self, width=440, confirm_text="Aplicar")
 
     def execute(self, context):
         try:
@@ -16233,7 +15820,7 @@ def _make_component(spec):
 
     cls = type(f"CS2_OT_comp_{key}", (bpy.types.Operator,), {
         "bl_idname": f"cs2.comp_{key}", "bl_label": spec["label"], "bl_description": spec["desc"],
-        "bl_options": {"REGISTER", "UNDO"}, "__annotations__": ann,
+        "bl_options": {"UNDO"}, "__annotations__": ann,
         "_fields": fields, "invoke": invoke, "execute": execute, "draw": draw,
         "poll": classmethod(lambda cls, context: getattr(context.scene, "cs2_building", None) is not None),
     })
@@ -16332,6 +15919,87 @@ def _comp_draw(op, context, spec):
                     col.prop(op, n)
 
 
+class _VisProxy:
+    """Objeto para las condiciones `vis` de los campos: lee de la pared (caras elegidas) o del edificio, como el cuadro de diálogo."""
+
+    def __init__(self, s, w, faces):
+        self._s, self._w = s, w
+        self.alcance = "FACES" if faces else "ALL"
+
+    def __getattr__(self, n):
+        for src in ((self._w, self._s) if self.alcance == "FACES" else (self._s, self._w)):
+            if hasattr(src, n):
+                return getattr(src, n)
+        raise AttributeError(n)
+
+
+def _wall_use_of(prop):
+    """La propiedad «use_…» del grupo de pared al que pertenece `prop` (o None si no depende de ninguno)."""
+    for g in WALL_GROUPS.values():
+        if prop in g["ints"] or prop in g["floats"]:
+            return g["use"]
+    return None
+
+
+def _comp_section(lay, context, spec, editing, n):
+    """Un componente como sección desplegable con sus valores a la vista: cada cambio se aplica (y se ve) enseguida."""
+    s = context.scene.cs2_building
+    w = context.scene.cs2_wall
+    faces = editing and not spec.get("only_all")
+    res = lay.panel("cs2_comp_" + spec["key"], default_closed=True)
+    header, body = res if isinstance(res, tuple) else (res, res)
+    header.label(text=spec["label"], icon=spec["icon"])
+    if body is None:
+        return
+    if editing and spec.get("only_all"):
+        ui_note(body, "Vale para todo el edificio (no por caras).")
+    if faces and n == 0:
+        body.label(text="Hacé clic en una o más caras de la forma", icon="INFO")
+        return
+    uses = {}
+    if faces:
+        for _gid, use, label in spec.get("wall_groups", []):
+            body.prop(w, use, text=label or f"Personalizar {spec['label'].lower()} en estas caras")
+            uses[use] = getattr(w, use)
+    if spec.get("style"):
+        kind = spec["style"]
+        sb = body.column()
+        sb.label(text="Estilo")
+        if faces:
+            draw_style_picker(sb, w, _KIND_WALL[kind], "wall")
+        else:
+            draw_style_picker(sb, s, _KIND_PROP[kind], "building")
+    proxy = _VisProxy(s, w, faces)
+    for title, fields, _cond in spec["groups"]:
+        shown = []
+        for f in fields:
+            attr = f["w"] if faces else f["g"]
+            if not attr:
+                continue
+            vis = f.get("vis")
+            try:
+                if vis and not vis(proxy):
+                    continue
+            except Exception:
+                pass
+            shown.append(attr)
+        if not shown:
+            continue
+        col = body.column(align=True)
+        col.label(text=title)
+        data = w if faces else s
+        for attr in shown:
+            r = col.row(align=True)
+            use = _wall_use_of(attr) if faces else None
+            if use and not uses.get(use, getattr(w, use, True)):
+                r.active = False
+            r.prop(data, attr)
+    if faces and spec.get("roof"):
+        ui_note(body, "El techo de caras sueltas se arma en «Más opciones…».")
+    body.operator(f"cs2.comp_{spec['key']}", text="Más opciones…" if not spec.get("style") else "Editar el estilo y más opciones…",
+                  icon="PREFERENCES")
+
+
 class CS2_PT_comp(bpy.types.Panel):
     bl_label = "Componentes"
     bl_idname = "CS2_PT_comp"
@@ -16360,20 +16028,26 @@ class CS2_PT_comp(bpy.types.Panel):
             row.label(text="Elegir paredes de material:")
             for k_, lab_ in (("1", "A"), ("2", "B"), ("3", "C"), ("4", "D")):
                 row.operator("cs2.sel_wall_mat", text=lab_).mat = k_
-        col = lay.column(align=True)
-        col.enabled = not (editing and n == 0)
-        for spec in _COMP["specs"].values():
-            row = col.row(align=True)
-            row.operator(f"cs2.comp_{spec['key']}", text=spec["label"], icon=spec["icon"])
         if not editing:                 # tipos de fachada y estilos de una vez (valen para todo el edificio)
-            fbox = lay.box()
-            fbox.label(text="Tipos de fachada", icon="OUTLINER_OB_MESH")
-            grid = fbox.grid_flow(columns=2, align=True)
-            for k, v in FACADE_TYPES.items():
-                grid.operator("cs2.facade_type", text=v[0]).kind = k
-            row = fbox.row(align=True)
-            for k, v in LOOK_PRESETS.items():
-                row.operator("cs2.look", text=v[0].replace("Casa moderna: ", ""), icon="HOME").look = k
+            res = lay.panel("cs2_facade_types", default_closed=False)
+            fh, fbox = res if isinstance(res, tuple) else (res, res)
+            fh.label(text="Tipos de fachada", icon="OUTLINER_OB_MESH")
+            if fbox is not None:
+                grid = fbox.grid_flow(columns=2, align=True)
+                for k, v in FACADE_TYPES.items():
+                    grid.operator("cs2.facade_type", text=v[0]).kind = k
+                row = fbox.row(align=True)
+                for k, v in LOOK_PRESETS.items():
+                    row.operator("cs2.look", text=v[0].replace("Casa moderna: ", ""), icon="HOME").look = k
+        row = lay.row(align=True)
+        row.prop(s, "auto_refresh", icon="FILE_REFRESH")
+        if not s.auto_refresh or _PENDING[0]:
+            sub = row.row(align=True)
+            sub.alert = bool(_PENDING[0])
+            sub.operator("cs2.generate", text="Actualizar ahora" + (" •" if _PENDING[0] else ""), icon="FILE_REFRESH")
+        for spec in _COMP["specs"].values():
+            _comp_section(lay, context, spec, editing, n)
+
 
 
 def _register_components():

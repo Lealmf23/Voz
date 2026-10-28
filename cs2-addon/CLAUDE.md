@@ -1,6 +1,6 @@
 # CS2 Generador de Edificios (add-on de Blender)
 
-Add-on de un solo archivo (`cs2_edificio_addon.py`, v2.82, ~16 900 líneas) que genera edificios low-poly
+Add-on de un solo archivo (`cs2_edificio_addon.py`, v2.83, ~16 700 líneas) que genera edificios low-poly
 para Cities: Skylines 2 (y CS1) con LODs, UV, texturas y exportación FBX. Blender 4.2+.
 
 ## Cómo trabajar con Leo
@@ -27,7 +27,7 @@ para Cities: Skylines 2 (y CS1) con LODs, UV, texturas y exportación FBX. Blend
 - `roof_build` (~línea 7000+): techos; rectángulos de `roof_rects`, vecinos con `_roof_neighbors`,
   voladizos `ov_m/ov_p`, relleno de hastiales (`ends`).
 - Alcance "Todo el edificio / Caras elegidas": `_scope_update`, `_depsgraph_handler`, `_comp_invoke_state`.
-- Paneles `CS2_PT_*` (25), operadores `CS2_OT_*` (~59). Exportación: `CS2_PT_export`, `CS2_PT_export_go`.
+- Paneles `CS2_PT_*` (12, todos registrados), operadores `CS2_OT_*` (~60). Exportación: `CS2_PT_export`, `CS2_PT_export_go`.
 - Registro de errores: `_ERRLOG` + "Copiar informe".
 
 ## Texturas: giro y material por pared (v2.77)
@@ -84,8 +84,17 @@ para Cities: Skylines 2 (y CS1) con LODs, UV, texturas y exportación FBX. Blend
   borrar, cambiar de tipo (con las medidas por defecto del tipo nuevo), medir, correr, estilo propio y ranuras agregadas (que no se pisen con otras).
   El estilo propio de una abertura viaja en `p["_ss"]` y lo lee `style_for(p, mat, cfg, op)`. En una curva las ediciones se aplican en la pared desenrollada
   (`_chain_virtual`) y después se reparten a las facetas.
-- Los paneles viejos de «Fachada» (`CS2_PT_alcance`, `_win`, `_door`, `_rev`, `_bal`...) ya no se registran desde que existen los cuadros de
-  componentes (`CS2_PT_comp`): no agregar interfaz nueva ahí. Lo de la grilla y «Elegir paredes por material» va en `CS2_PT_ranuras`/`CS2_PT_comp`.
+- Los paneles viejos de «Fachada» (`CS2_PT_alcance`, `_win`, `_door`...) se borraron en v2.83.
+
+## Personalizar (v2.83)
+- `CS2_PT_comp` dibuja cada componente de `_componentes()` como sección desplegable (`layout.panel`, `_comp_section`): con todo el edificio
+  muestra las propiedades `g` de la escena; con caras elegidas, las `w` de `scene.cs2_wall` (con la casilla `use_…` del grupo; los campos de
+  un grupo apagado se ven atenuados). Las condiciones `vis` se evalúan con `_VisProxy`.
+- «Actualizar solo» (`auto_refresh`, por defecto prendido): `_on_change` programa `_auto_refresh_tick` (temporizador, 0,35 s después del último
+  cambio) que rehace el edificio. Apagado, queda el botón «Actualizar ahora».
+- «Más opciones…» abre el cuadro del componente como diálogo con «Aplicar» (`invoke_props_dialog`, `bl_options={"UNDO"}`): ya no usa el panel
+  «Ajustar última operación», que es donde Blender 5.2.1 se cerró.
+- Texturas: abrir un material cierra los demás (`_ms_expand_update`).
 
 ## Editor web (carpeta `editor/`)
 - Editor estilo Sims (planta, paredes curvas, aberturas con fantasma, catálogo con miniaturas, exportar) con Blender como motor: ver
@@ -116,5 +125,4 @@ para Cities: Skylines 2 (y CS1) con LODs, UV, texturas y exportación FBX. Blend
   4. Comparar variantes lado a lado; botón "Exportar todo".
   5. Partir `roof_build`, `insert_balcony`, `build_curtain` en pasos con pruebas.
   6. (hecho: `flow_full`) Pruebas de recorridos completos (crear → personalizar → regenerar → exportar).
-- Decisiones pendientes de Leo: pasar los componentes del panel de rehacer a un diálogo con OK.
 - Leo ya probó un asset en CS2 y funciona bien (2026-10-28).

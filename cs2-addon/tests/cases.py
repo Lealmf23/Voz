@@ -539,6 +539,9 @@ class _FakeLayout:
     def __iter__(self):
         return iter(())
 
+    def panel(self, *a, **k):
+        return _FakeLayout(), _FakeLayout()
+
 
 def case_ui_draw():
     """Todos los paneles de la barra lateral se dibujan sin errores, con y sin edificio, con y sin «Avanzado» y con la vista rápida."""
@@ -2213,6 +2216,68 @@ def case_facade_types():
         tris[k] = a.mesh_tris(o)
         check(tris[k] < 20000, f"{k}: {tris[k]} triángulos en la malla principal (demasiados)")
     result(tipos=len(tris), max_tris=max(tris.values()))
+
+
+
+def case_comp_panel():
+    """Los componentes se editan dentro del panel: con todo el edificio muestran los valores generales, con caras elegidas los de la pared
+    (y escribir uno llega a la cara); «Actualizar solo» rehace el edificio después de un cambio; el cuadro abre como diálogo (sin rehacer)."""
+    import bmesh
+    s = setup("BOX", "FLAT", 20, 12, 3)
+    s.ui_tab = "PERS"
+    props = []
+
+    class Rec(_FakeLayout):
+        def prop(self, data, attr, *a_, **k_):
+            props.append((data.bl_rna.identifier, attr))
+            return _FakeLayout()
+
+        def panel(self, *a_, **k_):
+            return Rec(), Rec()
+
+        def __getattr__(self, n):
+            if n.startswith("__"):
+                raise AttributeError(n)
+            return lambda *a_, **k_: Rec()
+
+    def draw():
+        props.clear()
+        inst = type("X", (), {})()
+        inst.layout = Rec()
+        a.CS2_PT_comp.draw(inst, bpy.context)
+        return set(props)
+    got = draw()
+    check(("CS2BuildingProps", "win_w") in got and ("CS2BuildingProps", "r_preset") in got, "el panel no muestra los valores generales de los componentes")
+    check(all(op.bl_options == {"UNDO"} for op in a._COMP["classes"]), "los cuadros de componentes siguen con el panel de rehacer")
+    # actualizar solo
+    o0 = a._main_obj(s)
+    n0 = len(o0.data.polygons)
+    s.win_w = 2.6
+    check(a._PENDING[0], "el cambio no quedó pendiente")
+    a._AUTO["t"] = 0.0
+    a._auto_refresh_tick()
+    check(not a._PENDING[0], "«Actualizar solo» no rehízo el edificio")
+    check(len(a._main_obj(s).data.polygons) != n0, "el edificio no cambió después de actualizar")
+    # caras elegidas
+    bpy.ops.cs2.edit_shape()
+    obj = s.shape_object
+    bm = bmesh.from_edit_mesh(obj.data)
+    for f in bm.faces:
+        f.select = False
+    f = [f for f in bm.faces if f.normal.y < -0.9][0]
+    f.select = True
+    bm.faces.active = f
+    bmesh.update_edit_mesh(obj.data)
+    got = draw()
+    check(("CS2WallProps", "win_w") in got and ("CS2WallProps", "use_win") in got, "con caras elegidas no se ven los valores de la pared")
+    w = bpy.context.scene.cs2_wall
+    w.use_win = True
+    w.win_w = 2.5
+    bm = bmesh.from_edit_mesh(obj.data)
+    lays = a.wall_layers(bm)
+    f = [f for f in bm.faces if f.select][0]
+    check(abs(f[lays["cs2_w_w"]] - 2.5) < 1e-4 and f[lays["cs2_flags"]] & a.FLAG_WIN, "el valor de la pared no llegó a la cara")
+    result(ok=True)
 
 
 CASES = {k[5:]: v for k, v in globals().items() if k.startswith("case_")}
