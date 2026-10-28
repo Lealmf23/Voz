@@ -1510,6 +1510,15 @@ def case_building_audit():
     for k in a.LOOK_PRESETS:
         bpy.ops.cs2.look(look=k)
         correr("estilo " + k)
+    for m in ("1", "2", "3", "4", "5"):
+        s.gr_on_g, s.gr_mat_g = "1", m
+        correr("retícula material " + m)
+    s.gr_on_g = "0"
+    s.sh_on_g, s.sh_walls_g = "1", "3"
+    for aw in ("0", "1", "2"):
+        s.sh_aw_g = aw
+        correr("planta comercial toldos " + aw)
+    s.sh_on_g = "0"
     check(n >= 20, f"se esperaban todos los techos, porches y estilos y hay {n}")
     check(not malos, "mallas con defectos: " + "; ".join(malos[:6]))
     result(edificios=n)
@@ -1734,6 +1743,212 @@ def case_balcony_run():
             check(out[nombre][k] == 1, f"curva, {nombre}, piso {k}: debía ser una sola losa continua ({out[nombre][k]})")
     check(all(out["Balcón vidrio y pasamanos"][k] >= 3 for k in (1, 2, 3)), "sin corrido la curva debía tener balcones sueltos")
     result(recto=run, curva=out["Corrido continuo vidrio"])
+
+
+def _defectos_malla(o):
+    """(caras degeneradas, pares de caras de distinto material superpuestas en el mismo plano y sentido)."""
+    import bmesh
+    from mathutils import kdtree
+    bm = bmesh.new()
+    bm.from_mesh(o.data)
+    bm.faces.ensure_lookup_table()
+    tiny = sum(1 for f in bm.faces if f.calc_area() < 1e-7)
+    kd = kdtree.KDTree(len(bm.faces))
+    for f in bm.faces:
+        kd.insert(f.calc_center_median(), f.index)
+    kd.balance()
+    zf = 0
+    for f in bm.faces:
+        for _co, i, _d in kd.find_range(f.calc_center_median(), 1e-3):
+            g = bm.faces[i]
+            if i > f.index and f.normal.dot(g.normal) > 0.999 and f.material_index != g.material_index:
+                zf += 1
+    bm.free()
+    return tiny, zf
+
+
+def _marca_pared(obj, normal_y, attrs):
+    """Escribe atributos de cara (nombre de capa -> valor) en las paredes de la forma que miran a `normal_y` (-1 frente, 1 fondo)."""
+    import bmesh
+    bm = bmesh.new()
+    bm.from_mesh(obj.data)
+    bm.transform(obj.matrix_world)
+    lays = a.wall_layers(bm, create=True)
+    bm.transform(obj.matrix_world.inverted())
+    n = 0
+    for f in bm.faces:
+        if abs(f.normal.z) < 0.12 and f.normal.y * normal_y > 0.9:
+            for k, v in attrs.items():
+                f[lays[k]] = v
+            n += 1
+    bm.to_mesh(obj.data)
+    bm.free()
+    return n
+
+
+def case_grid():
+    """Retícula estructural: pilastras entre las columnas de ventanas y losas en cada piso, en relieve y sin defectos; se puede pedir
+    solo una de las dos cosas y también por pared."""
+    a._ERRLOG.clear()
+    s = setup("BOX", "FLAT", 20, 12, 4, styles=False)
+    FB = a.MAT["facb"]
+    fh = s.floor_height
+
+    def gen():
+        bpy.ops.cs2.generate()
+        bpy.ops.cs2.regen_lods()
+        return lod_objs(s)
+
+    def frente(o):
+        return [p for p in o.data.polygons if p.material_index == FB and p.normal.y < -0.9]
+    o = gen()[0]
+    check(not frente(o), "sin retícula no debe haber material B en el frente")
+    tris = {"0": a.mesh_tris(o)}
+    s.gr_mat_g = "3"
+    res = {}
+    for modo in ("1", "2", "3"):
+        s.gr_on_g = modo
+        objs = gen()
+        o0 = objs[0]
+        tris[modo] = a.mesh_tris(o0)
+        check(tris[modo] > tris["0"], f"modo {modo}: la retícula no agregó geometría")
+        check(_defectos_malla(o0) == (0, 0), f"modo {modo}: la malla tiene defectos {_defectos_malla(o0)}")
+        for lod, ob in enumerate(objs[:2]):
+            check(finite_mesh(ob.data), f"modo {modo} LOD{lod}: malla con valores inválidos")
+        zs = sorted({round(p.center.z, 1) for p in frente(o0)})
+        res[modo] = zs
+    check(tris["1"] > tris["2"] and tris["1"] > tris["3"], "pilastras y losas juntas deben pesar más que cada una sola")
+    # losas: un nivel por cada piso interior (3 con 4 pisos) y solo la mitad con «cada 2 pisos»
+    s.gr_on_g = "3"
+    niveles = sorted({round(p.center.z, 1) for p in frente(gen()[0])})
+    check(len(niveles) == 3, f"debía haber 3 losas en el frente y hay {niveles}")
+    s.gr_every_g = "2"
+    niveles2 = sorted({round(p.center.z, 1) for p in frente(gen()[0])})
+    check(len(niveles2) == 1, f"con «cada 2 pisos» debía quedar 1 losa y hay {niveles2}")
+    s.gr_every_g = "1"
+    # pilastras: llegan de punta a punta de la pared
+    s.gr_on_g = "2"
+    o2 = gen()[0]
+    pz = [o2.data.vertices[i].co.z for p in frente(o2) for i in p.vertices]
+    check(min(pz) < 0.1 and max(pz) > 4 * fh - 2.0, f"las pilastras no recorren la pared ({min(pz):.2f} a {max(pz):.2f})")
+    # solo una pared: la del fondo
+    s.gr_on_g = "0"
+    obj = s.shape_object
+    check(_marca_pared(obj, 1, {"cs2_flags": a.FLAG_GRID, "cs2_gr_on": 1, "cs2_gr_walls": 3, "cs2_gr_mat": 3, "cs2_gr_every": 1,
+                                "cs2_gr_pw": 0.35, "cs2_gr_pd": 0.2, "cs2_gr_sh": 0.45, "cs2_gr_sd": 0.15, "cs2_gr_bay": 3.5}) > 0,
+          "la forma no tiene pared de fondo")
+    o = gen()[0]
+    check(not frente(o), "la retícula de la pared de fondo apareció en el frente")
+    fondo = [p for p in o.data.polygons if p.material_index == FB and p.normal.y > 0.9]
+    check(fondo, "la pared de fondo no recibió la retícula")
+    check(not a._ERRLOG, "quedaron errores registrados: " + "; ".join(f"{e['where']}: {e['msg'][:80]}" for e in a._ERRLOG[:4]))
+    result(tris=tris, losas=len(niveles))
+
+
+def case_shop():
+    """Planta baja comercial: vidriera entre pilares con el acceso dentro, cartel y toldos; solo en el frente, también sobre una
+    curva y por pared."""
+    import math
+    a._ERRLOG.clear()
+    s = setup("BOX", "FLAT", 20, 12, 4, styles=True)
+    fh = s.floor_height
+    GL, GS, RF, TR = a.MAT["glass"], a.MAT["gls"], a.MAT["roof"], a.MAT["trim"]
+
+    def gen():
+        bpy.ops.cs2.generate()
+        bpy.ops.cs2.regen_lods()
+        return lod_objs(s)
+
+    def baja(o, mat, ny=-1):
+        return [p for p in o.data.polygons if p.material_index == mat and p.normal.y * ny > 0.9 and p.center.z < fh]
+    o = gen()[0]
+    check(baja(o, GL), "sin planta comercial el frente debía tener ventanas abajo")
+    check(not baja(o, GS), "sin planta comercial no debe haber vidriera")
+    s.sh_on_g = "1"
+    s.sh_smat_g = "1"
+    objs = gen()
+    o = objs[0]
+    check(baja(o, GS), "la vidriera no apareció en el frente")
+    check(not baja(o, GL), "quedaron ventanas comunes en la planta baja del frente")
+    check(baja(o, GL, 1), "la planta baja del fondo no debía cambiar")
+    check(not baja(o, GS, 1), "la vidriera no debe salir en el fondo con «solo el frente»")
+    check(baja(o, a.MAT["door"]) or baja(o, a.MAT["gar"]), "el acceso desapareció")
+    cartel = [p for p in o.data.polygons if p.material_index == TR and p.normal.y < -0.9 and fh - s.sh_sign_g - 0.1 < p.center.z <= fh]
+    check(cartel, "no se ve la banda de cartel")
+    check(_defectos_malla(o) == (0, 0), f"la malla tiene defectos {_defectos_malla(o)}")
+    toldos0 = [p for p in o.data.polygons if p.material_index == RF and p.center.z < fh and abs(p.normal.z) > 0.2]
+    check(not toldos0, "sin toldos no debe haber caras de toldo abajo")
+    for modo in ("1", "2"):
+        s.sh_aw_g = modo
+        o = gen()[0]
+        toldos = [p for p in o.data.polygons if p.material_index == RF and fh - 1.2 < p.center.z < fh and abs(p.normal.z) > 0.2]
+        check(toldos, f"toldos modo {modo}: no aparecieron")
+        check(_defectos_malla(o) == (0, 0), f"toldos modo {modo}: defectos {_defectos_malla(o)}")
+    # LOD1 también lleva la vidriera
+    objs = gen()
+    check(finite_mesh(objs[1].data) and baja(objs[1], GS), "el LOD1 debe tener la vidriera")
+    # «todas las paredes»
+    s.sh_walls_g = "3"
+    o = gen()[0]
+    check(baja(o, GS, 1), "con «todas las paredes» el fondo también lleva vidriera")
+    s.sh_walls_g = "1"
+    # sobre una curva: círculo de 24 lados, solo las facetas del frente llevan vidriera
+    _prisma(s.shape_object, [(8 * math.cos(2 * math.pi * i / 24), 8 * math.sin(2 * math.pi * i / 24)) for i in range(24)])
+    s.curve_deg = 25.0
+    o = gen()[0]
+    ny = lambda p: p.normal.y
+    frente = [p for p in o.data.polygons if p.material_index == GS and p.center.z < fh]
+    check(frente, "la curva no recibió vidriera")
+    check(all(ny(p) < -0.3 for p in frente), "una faceta que no mira al frente recibió vidriera")
+    check(all(finite_mesh(ob.data) for ob in lod_objs(s)), "malla con valores inválidos en la curva")
+    check(not a._ERRLOG, "quedaron errores registrados: " + "; ".join(f"{e['where']}: {e['msg'][:80]}" for e in a._ERRLOG[:4]))
+    result(vidrios=len(frente))
+
+
+def case_comp_groups():
+    """Los cuadros «Retícula» y «Planta comercial» aplican sus ajustes a las paredes elegidas (y solo a ellas)."""
+    import bmesh
+    s = setup("BOX", "FLAT", 20, 12, 4, styles=False)
+    obj = s.shape_object
+    bpy.ops.cs2.edit_shape()
+    check(obj.mode == "EDIT", "no entró a elegir caras")
+
+    def elegir(idx):
+        bm = bmesh.from_edit_mesh(obj.data)
+        bm.faces.ensure_lookup_table()
+        for f in bm.faces:
+            f.select_set(False)
+        bm.faces[idx].select_set(True)
+        bm.faces.active = bm.faces[idx]
+        bmesh.update_edit_mesh(obj.data, loop_triangles=False, destructive=False)
+    bm = bmesh.from_edit_mesh(obj.data)
+    frentes = sorted((f for f in bm.faces if abs(f.normal.z) < 0.12 and f.normal.y < -0.9), key=lambda f: f.calc_center_median().z)
+    check(len(frentes) >= 2, "la forma debería tener una pared de frente por piso")
+    abajo, arriba = frentes[0].index, frentes[1].index
+    elegir(abajo)
+    bpy.ops.cs2.comp_shop("EXEC_DEFAULT", alcance="FACES", sh_on="1", sh_aw="1")
+    elegir(arriba)
+    bpy.ops.cs2.comp_grid("EXEC_DEFAULT", alcance="FACES", gr_on="1", gr_mat="3")
+    bm = bmesh.from_edit_mesh(obj.data)
+    bm.faces.ensure_lookup_table()
+    lays = a.wall_layers(bm)
+    fa, fu = bm.faces[abajo], bm.faces[arriba]
+    check(int(fa[lays["cs2_flags"]]) & a.FLAG_SHOP and not int(fa[lays["cs2_flags"]]) & a.FLAG_GRID, "la planta baja debía quedar solo con vidriera")
+    check(int(fu[lays["cs2_flags"]]) & a.FLAG_GRID and not int(fu[lays["cs2_flags"]]) & a.FLAG_SHOP, "el piso 2 debía quedar solo con retícula")
+    check(int(fu[lays["cs2_gr_on"]]) == 1 and int(fu[lays["cs2_gr_mat"]]) == 3, "la retícula no guardó sus valores")
+    check(int(fa[lays["cs2_sh_on"]]) == 1 and int(fa[lays["cs2_sh_aw"]]) == 1, "la planta comercial no guardó sus valores")
+    otras = [g for g in bm.faces if g.index not in (abajo, arriba)]
+    check(all(not (int(g[lays["cs2_flags"]]) & (a.FLAG_GRID | a.FLAG_SHOP)) for g in otras), "otra pared cambió")
+    bpy.ops.cs2.edit_shape()
+    bpy.ops.cs2.regen_lods()
+    o = lod_objs(s)[0]
+    fh = s.floor_height
+    FB, GS = a.MAT["facb"], a.MAT["gls"]
+    check([p for p in o.data.polygons if p.material_index == FB and p.normal.y < -0.9 and fh < p.center.z < 2 * fh], "el piso 2 no recibió la retícula")
+    check(not [p for p in o.data.polygons if p.material_index == FB and (p.normal.y > 0.9 or p.center.z > 2 * fh)], "la retícula salió donde no debía")
+    check([p for p in o.data.polygons if p.material_index == GS and p.normal.y < -0.9 and p.center.z < fh], "el frente no recibió la vidriera")
+    check(not [p for p in o.data.polygons if p.material_index == GS and p.normal.y > 0.9], "el fondo recibió la vidriera")
+    result(ok=True)
 
 
 CASES = {k[5:]: v for k, v in globals().items() if k.startswith("case_")}

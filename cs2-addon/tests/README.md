@@ -41,6 +41,9 @@ Se ejecutan con el módulo `bpy` (sin abrir Blender):
 | curve_walls | Curvas hechas con facetas: detección por ángulo (círculo, octógono, caja, S) y ventanas/balcones repartidos por el arco; «Ver curvas detectadas» |
 | bays | Crujías (modos 6 a 9 de paños): columnas enteras alternas / cada tres / bordes, de piso a techo, en LOD0 y LOD1, y sobre la planta baja con otro material |
 | balcony_run | Balcón corrido: una sola losa por piso en pared recta y sobre toda una curva (balaustres, vidrio y macizo) |
+| grid | Retícula estructural: pilastras y losas en relieve (modos 1 a 3, cada N pisos, por pared), sin defectos ni errores |
+| shop | Planta baja comercial: vidriera con acceso, cartel, toldos, solo el frente, sobre una curva, sin defectos ni errores |
+| comp_groups | Los cuadros «Retícula» y «Planta comercial» aplican a las paredes elegidas y solo a ellas |
 | flow_full | Recorrido completo (crear, personalizar, regenerar, UV, sombras, texturas, exportar) sin errores en el informe |
 | mip_bleed | Con mipmaps (textura achicada) un material no toma el color de su vecino, en el atlas ni en el horneado |
 | quick_view | La vista rápida muestra la textura elegida sin UV ni horneado, se apaga y se actualiza con el botón |

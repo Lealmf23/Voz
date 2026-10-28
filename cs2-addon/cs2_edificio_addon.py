@@ -9,7 +9,7 @@ Después: Vista 3D > tecla N > pestaña "CS2".
 bl_info = {
     "name": "CS2 Generador de Edificios",
     "author": "Leo",
-    "version": (2, 79, 0),
+    "version": (2, 80, 0),
     "blender": (4, 2, 0),
     "location": "Vista 3D > Barra lateral (N) > CS2",
     "description": "Edificios low-poly de todo tipo (residencial, comercial, oficinas, industrial, servicios y emblemáticos) con LODs y FBX para Cities: Skylines 2",
@@ -274,6 +274,8 @@ def load_pieces(coll):
 
 
 def pieces_for(p, mat):
+    if mat == MAT["gls"]:
+        return []
     return p.get("door_pieces" if mat == MAT["door"] else "window_pieces") or []
 
 
@@ -1727,7 +1729,9 @@ def style_by_id(sid):
 
 
 def style_for(p, mat, cfg=None):
-    """Estilo que le toca a una abertura: el de su pared, o el general; None si no hay."""
+    """Estilo que le toca a una abertura: el de su pared, o el general; None si no hay (la vidriera comercial, de vidrio liso, no lleva)."""
+    if mat == MAT["gls"]:
+        return None
     is_door = mat == MAT["door"]
     if cfg:
         sid = int(cfg.get("d_style" if is_door else "w_style", 0) or 0)
@@ -2302,6 +2306,64 @@ ROOF_PRESETS = {
 
 
 
+# Grupos de ajustes por pared hechos con una tabla (retícula estructural y planta baja comercial): cada uno tiene su bandera, sus
+# propiedades del edificio (<clave>_<k>_g), las de la pared (<clave>_<k>) y sus atributos de cara (<pre><k>).
+FLAG_GRID, FLAG_SHOP = 256, 512
+_SURF_ITEMS = [("1", "Molduras", ""), ("2", "Fachada (A)", ""), ("3", "Material B", ""), ("4", "Material C", ""), ("5", "Material D", "")]
+_WALLS_ITEMS = [("1", "Solo el frente", ""), ("2", "Frente y costados", ""), ("3", "Todas las paredes", "")]
+NEW_GROUPS = {
+    "gr": dict(flag=FLAG_GRID, use="use_gr", label="Retícula estructural", icon="MOD_LATTICE", pre="cs2_gr_",
+               ints={"on": ("Retícula", [("0", "Ninguna", ""), ("1", "Pilastras y losas", ""), ("2", "Solo pilastras", ""),
+                                         ("3", "Solo losas", "")], 0),
+                     "walls": ("Dónde", _WALLS_ITEMS, 3),
+                     "mat": ("Material del marco", _SURF_ITEMS, 1),
+                     "every": ("Una losa cada", [("1", "Cada piso", ""), ("2", "Cada 2 pisos", ""), ("3", "Cada 3 pisos", "")], 1)},
+               floats={"pw": ("Ancho de pilastra (m)", 0.1, 1.5, 0.35), "pd": ("Relieve de pilastra (m)", 0.03, 0.6, 0.2),
+                       "sh": ("Alto de la losa (m)", 0.1, 1.2, 0.45), "sd": ("Relieve de la losa (m)", 0.03, 0.6, 0.15),
+                       "bay": ("Separación sin ventanas (m)", 1.5, 8.0, 3.5)}),
+    "sh": dict(flag=FLAG_SHOP, use="use_sh", label="Planta baja comercial", icon="SHADING_RENDERED", pre="cs2_sh_",
+               ints={"on": ("Planta baja comercial", [("0", "No", ""), ("1", "Vidriera con pilares", "")], 0),
+                     "walls": ("Dónde", _WALLS_ITEMS, 1),
+                     "pmat": ("Material de pilares", _SURF_ITEMS, 1), "smat": ("Material del cartel", _SURF_ITEMS, 1),
+                     "aw": ("Toldos", [("0", "Sin toldos", ""), ("1", "Uno por tramo", ""), ("2", "Corrido", "")], 0),
+                     "awmat": ("Color del toldo", [("1", "Oscuro", ""), ("2", "Metal", ""), ("3", "Madera", "")], 1)},
+               floats={"bay": ("Ancho de tramo (m)", 1.5, 8.0, 3.2), "pw": ("Ancho de pilar (m)", 0.15, 1.2, 0.4),
+                       "pd": ("Relieve de pilar (m)", 0.02, 0.5, 0.12), "sign": ("Alto del cartel (m)", 0.2, 1.5, 0.6),
+                       "signd": ("Relieve del cartel (m)", 0.02, 0.5, 0.12), "rec": ("Hundido del vidrio (m)", 0.0, 0.6, 0.15),
+                       "ent": ("Hundido del acceso (m)", 0.0, 1.8, 0.0), "base": ("Zócalo bajo el vidrio (m)", 0.0, 1.2, 0.3),
+                       "awd": ("Salida del toldo (m)", 0.4, 3.0, 1.2)}),
+}
+NEW_GROUP_INTS = tuple(g["pre"] + k for g in NEW_GROUPS.values() for k in g["ints"])
+NEW_GROUP_FLOATS = tuple(g["pre"] + k for g in NEW_GROUPS.values() for k in g["floats"])
+
+
+def group_cfg(p, cfg, key):
+    """Valores de un grupo para una pared (dict): los de la pared si los personalizó, si no los generales del edificio (o None)."""
+    g = NEW_GROUPS[key]
+    c = cfg or {}
+    if int(c.get("flags", 0)) & g["flag"]:
+        pre = key + "_"
+        out = {k: int(c.get(pre + k, d)) for k, (_l, _i, d) in g["ints"].items()}
+        out.update({k: float(c.get(pre + k, d)) for k, (_l, _lo, _hi, d) in g["floats"].items()})
+        out["_wall"] = True
+        return out
+    return (p.get("groups") or {}).get(key)
+
+
+def group_on(p, cfg, key, n, zmin=0.0):
+    """El grupo aplicado a una pared (dict de valores) o None si esa pared no lo lleva."""
+    g = group_cfg(p, cfg, key)
+    if not g or not int(g.get("on", 0)):
+        return None
+    if key == "sh" and zmin > 0.05:
+        return None
+    if g.get("_wall"):
+        return g
+    front, side = n.y < -0.7, abs(n.x) > 0.7
+    mode = int(g.get("walls", 1))
+    return g if (front or (mode >= 2 and side) or mode >= 3) else None
+
+
 PORCH_INTS = ("on", "roof", "rail", "enc", "stp", "lv", "dmat", "pmat")
 PORCH_FLOATS = ("d", "w", "off", "ext", "ph", "dh", "pitch", "sp", "sz")
 PORCH_DEF = dict(on=2, roof=2, rail=2, enc=1, stp=1, lv=1, dmat=5, pmat=1,
@@ -2309,13 +2371,13 @@ PORCH_DEF = dict(on=2, roof=2, rail=2, enc=1, stp=1, lv=1, dmat=5, pmat=1,
 WALL_INT_ATTRS = ("cs2_flags", "cs2_w_count", "cs2_door_mode", "cs2_bal_mode", "cs2_w_style", "cs2_d_style", "cs2_b_style",
                   "cs2_f_mat", "cs2_f_rot", "cs2_p_mode", "cs2_p_mat", "cs2_c_mat", "cs2_s_mode", "cs2_s_mat",
                   "cs2_k_mode", "cs2_k_bmat", "cs2_k_mmat", "cs2_k_fmat", "cs2_k_finn",
-                  "cs2_k_prof", "cs2_k_pat", "cs2_k_patn", "cs2_k_basemat", "cs2_k_capmat") + tuple("cs2_o_" + k for k in PORCH_INTS) + tuple("cs2_r_" + k for k in ROOF_KEYS_INT)
+                  "cs2_k_prof", "cs2_k_pat", "cs2_k_patn", "cs2_k_basemat", "cs2_k_capmat") + tuple("cs2_o_" + k for k in PORCH_INTS) + tuple("cs2_r_" + k for k in ROOF_KEYS_INT) + NEW_GROUP_INTS
 WALL_FLOAT_ATTRS = ("cs2_w_w", "cs2_w_h", "cs2_w_sill", "cs2_w_depth", "cs2_w_off",
                     "cs2_d_pos", "cs2_d_w", "cs2_d_h", "cs2_d_depth", "cs2_d_off",
                     "cs2_b_depth", "cs2_b_w", "cs2_b_rail", "cs2_b_off",
                     "cs2_p_pad", "cs2_p_prob", "cs2_c_w", "cs2_c_d", "cs2_s_gap", "cs2_s_w", "cs2_s_d",
                     "cs2_k_mw", "cs2_k_mh", "cs2_k_pt", "cs2_k_pd", "cs2_k_band", "cs2_k_edge", "cs2_k_find", "cs2_k_fint",
-                    "cs2_k_ht", "cs2_k_hd", "cs2_k_patk", "cs2_k_doorw", "cs2_k_baseh", "cs2_k_caph", "cs2_k_capo", "cs2_k_cornw") + tuple("cs2_o_" + k for k in PORCH_FLOATS) + tuple("cs2_r_" + k for k in ROOF_KEYS_FLOAT)
+                    "cs2_k_ht", "cs2_k_hd", "cs2_k_patk", "cs2_k_doorw", "cs2_k_baseh", "cs2_k_caph", "cs2_k_capo", "cs2_k_cornw") + tuple("cs2_o_" + k for k in PORCH_FLOATS) + tuple("cs2_r_" + k for k in ROOF_KEYS_FLOAT) + NEW_GROUP_FLOATS
 _CW_NEW_F = ("ht", "hd", "patk", "doorw", "baseh", "caph", "capo", "cornw")
 _CW_NEW_I = ("prof", "pat", "patn", "basemat", "capmat")
 FLAG_WIN, FLAG_DOOR, FLAG_BAL = 1, 2, 4
@@ -2595,8 +2657,18 @@ def _chain_openings(p, poly, n, lod, cfg, ch):
     if key not in cache:
         base = {k: v for k, v in cfg.items() if k != "_chain"}
         vp = [(0.0, ch["zmin"]), (ch["L"], ch["zmin"]), (ch["L"], ch["zmax"]), (0.0, ch["zmax"])]
-        cache[key] = shape_openings(p, vp, Vector((0.0, -1.0, 0.0)), ch["wid"], lod, base)
+        p2 = p
+        gsh = (p.get("groups") or {}).get("sh")
+        if gsh or base.get("flags", 0) & FLAG_SHOP:      # vidriera sobre una curva: un tramo por faceta (los pilares caen en las uniones)
+            avg = ch["L"] / max(1, ch["count"])
+            p2 = dict(p, groups=dict(p.get("groups") or {}))
+            if gsh:
+                p2["groups"]["sh"] = dict(gsh, bay=min(gsh["bay"], avg))
+            if base.get("flags", 0) & FLAG_SHOP:
+                base["sh_bay"] = min(float(base.get("sh_bay", 3.2)), avg)
+        cache[key] = shape_openings(p2, vp, Vector((0.0, -1.0, 0.0)), ch["wid"], lod, base)
     ops, bals, depths = cache[key]
+    base_cfg = {k: v for k, v in cfg.items() if k != "_chain"}
     front = n.y < -0.7
     keep_bal = _chain_keep_bal(p, cfg, n)
     keep_door = front or int(cfg.get("door_mode", 0)) == 1
@@ -2617,7 +2689,7 @@ def _chain_openings(p, poly, n, lod, cfg, ch):
         is_bal = round(c, 3) in bal_at
         if w > hi - lo + 1e-6:
             # faceta más corta que la abertura: una ventana se angosta para entrar (mínimo 0,6 m); puertas y balcones no
-            if op[4] != MAT["glass"] or is_bal or hi - lo < 0.6:
+            if op[4] not in (MAT["glass"], MAT["gls"]) or is_bal or hi - lo < 0.6:
                 continue
             w = hi - lo
             op = (c - w / 2, c + w / 2) + tuple(op[2:])
@@ -2626,6 +2698,9 @@ def _chain_openings(p, poly, n, lod, cfg, ch):
         na0 = min(max(op[0], lo), hi - w)
         loc = amin_f + (na0 - s0)
         new = (loc, loc + w) + tuple(op[2:])
+        if op[4] == MAT["gls"] and op[2] < ch["zmin"] + fh and not group_on(p, base_cfg, "sh", n, ch["zmin"]):
+            new = (new[0], new[1], op[2] + sill, op[2] + sill + wh, MAT["glass"])      # esta faceta no lleva vidriera: ventana común
+            dep = p["win_depth"]
         if is_bal and not keep_bal:       # sin balcón en esta faceta: el hueco de puerta vidriada pasa a ser una ventana
             new = (new[0], new[1], op[2] + sill, op[2] + sill + wh, MAT["glass"])
             dep = p["win_depth"]
@@ -2781,6 +2856,9 @@ def shape_openings(p, poly, n, wid, lod, cfg=None):
                 bals.append(((rect[0] + rect[1]) / 2, base, loggia_dep, rect[1] - rect[0], rail, bstyle, ww))
             elif is_bal:
                 bals.append(((rect[0] + rect[1]) / 2, base, bd, bw, rail, bstyle, ww))
+    sh = group_on(p, cfg, "sh", n, zmin)
+    if sh and ground and length >= 2.0:
+        ops, depths = _shop_ops(p, sh, ops, depths, amin, amax, zmin, fh)
     return ops, bals, depths
 
 
@@ -4031,6 +4109,144 @@ def _emit_chain_runs(bm, p, cfg, ch, wid, lod, hi_on, q_hi):
         insert_balcony_run(bm, st, pts, normals, zb, bd, rb[0][4], p, lv)
 
 
+def _surf(i):
+    """Material de las listas «Molduras / A / B / C / D» (1 a 5)."""
+    return MAT[SURF_MATS.get(int(i), "trim")]
+
+
+def _shop_ops(p, sh, ops, depths, amin, amax, zmin, fh):
+    """Planta baja comercial: las ventanas del piso bajo se reemplazan por una vidriera (tramos de vidrio entre pilares) y el
+    acceso queda dentro de uno de los tramos. Devuelve (aberturas, profundidades)."""
+    keep = [(op, d) for op, d in zip(ops, depths) if not (op[4] == MAT["glass"] and op[2] < zmin + fh - 0.01)]
+    length = amax - amin
+    pw = min(sh["pw"], length / 3)
+    zg0, zg1 = zmin + sh["base"], zmin + fh - sh["sign"] - 0.05
+    if zg1 - zg0 < 0.8 or length < pw + 1.0:
+        return ops, depths
+    nb = max(1, int(round((length - pw) / max(1.0, sh["bay"]))))
+    cs = [amin + pw / 2 + (length - pw) * i / nb for i in range(nb + 1)]
+    door_i = next((i for i, (op, _d) in enumerate(keep) if op[4] == MAT["door"]), None)
+    door = keep[door_i][0] if door_i is not None else None
+    if door is not None and sh["ent"] > 0:
+        keep[door_i] = (door, max(keep[door_i][1], sh["ent"]))      # acceso hundido
+    new = []
+    for i in range(nb):
+        a0, a1 = cs[i] + pw / 2, cs[i + 1] - pw / 2
+        if a1 - a0 < 0.5:
+            continue
+        pieces = [(a0, a1)]
+        if door is not None and door[1] > a0 and door[0] < a1:
+            pieces = []
+            if door[0] - 0.1 - a0 >= 0.5:
+                pieces.append((a0, door[0] - 0.1))
+            if a1 - (door[1] + 0.1) >= 0.5:
+                pieces.append((door[1] + 0.1, a1))
+        for x0, x1 in pieces:
+            new.append(((x0, x1, zg0, zg1, MAT["gls"]), sh["rec"]))
+    keep += new
+    return [k[0] for k in keep], [k[1] for k in keep]
+
+
+def _add_awning(bm, A, B, n, depth, z_top, drop, val, mat):
+    """Toldo inclinado entre A y B (puntos pegados a la pared): tapa por arriba y por abajo y el volado del frente."""
+    zv = Vector((0, 0, 1))
+    a0, b0 = A + zv * z_top, B + zv * z_top
+    a1, b1 = A + n * depth + zv * (z_top - drop), B + n * depth + zv * (z_top - drop)
+    a2, b2 = a1 - zv * val, b1 - zv * val
+    for quad in ([a1, b1, b0, a0], [a0, b0, b1, a1], [a2, b2, b1, a1], [a1, b1, b2, a2]):
+        try:
+            bm.faces.new([bm.verts.new(v) for v in quad]).material_index = mat
+        except ValueError:
+            pass
+
+
+def _add_shopfront(bm, o, u, n, p, sh, ops, amin, amax, zmin, fh):
+    """Lo que rodea a la vidriera: pilares entre los tramos, banda de cartel y toldos."""
+    ay = -n
+    base_ops = sorted((op for op in ops if op[2] <= zmin + sh["base"] + 0.02 and op[4] in (MAT["gls"], MAT["door"])), key=lambda op: op[0])
+    if not base_ops:
+        return
+    zg1 = zmin + fh - sh["sign"] - 0.05
+    pm = _surf(sh["pmat"])
+    prev = amin
+    gaps = []
+    for op in base_ops:
+        gaps.append((prev, op[0]))
+        prev = max(prev, op[1])
+    gaps.append((prev, amax))
+    for g0, g1 in gaps:
+        if g1 - g0 >= 0.25:
+            add_obox(bm, o + u * ((g0 + g1) / 2) + n * (sh["pd"] / 2) + Vector((0, 0, zmin + (fh - 0.05) / 2)), u, ay,
+                     g1 - g0, sh["pd"], fh - 0.05, pm, skip=("+y",))
+    if sh["sign"] >= 0.2:
+        add_obox(bm, o + u * ((amin + amax) / 2) + n * (sh["signd"] / 2) + Vector((0, 0, zmin + fh - sh["sign"] / 2 - 0.02)), u, ay,
+                 amax - amin, sh["signd"], sh["sign"], _surf(sh["smat"]), skip=("+y",))
+    if int(sh["aw"]):
+        am = (MAT["roof"], MAT["rail"], MAT["door"])[min(max(int(sh["awmat"]), 1), 3) - 1]
+        glass = [op for op in base_ops if op[4] == MAT["gls"]]
+        spans = [(min(op[0] for op in glass), max(op[1] for op in glass))] if (int(sh["aw"]) == 2 and glass) else [(op[0], op[1]) for op in glass]
+        for a0, a1 in spans:
+            _add_awning(bm, o + u * a0, o + u * a1, n, sh["awd"], zg1 + 0.03, 0.45, 0.22, am)
+
+
+def _grid_cols(ops, skip_to):
+    """Columnas de aberturas [a0, a1] (sin las que quedan por debajo de `skip_to`)."""
+    cols = {}
+    for op in ops:
+        if op[4] not in (MAT["glass"], MAT["gls"], MAT["door"], MAT["facade"]) or op[3] <= skip_to:
+            continue
+        c = cols.setdefault(round(op[0], 2), [op[0], op[1]])
+        c[1] = max(c[1], op[1])
+    return sorted(cols.values())
+
+
+def _add_grid(bm, o, u, n, p, G, ops, amin, amax, zmin, zmax, fh, shop):
+    """Retícula estructural: pilastras entre las columnas de ventanas y losas (frentes de piso) en relieve; el relleno queda hundido."""
+    ay = -n
+    mat = _surf(G["mat"])
+    mode = int(G["on"])
+    length = amax - amin
+    z_g = zmin + fh if shop else zmin       # sobre una vidriera no se apoyan pilastras: tiene sus propios pilares
+    if mode in (1, 2) and zmax - z_g > 0.5:
+        cols = _grid_cols(ops, z_g)
+        pw = G["pw"]
+        spots = []                           # (centro, ancho)
+        if cols:
+            ends = [amin] + [x for c in cols for x in c] + [amax]
+            gaps = [(ends[i], ends[i + 1]) for i in range(0, len(ends), 2)]       # tramos sin aberturas: borde-col, col-col, col-borde
+            for i, (g0, g1) in enumerate(gaps):
+                w = min(pw, g1 - g0 - 0.15)
+                if i == 0:
+                    if w >= 0.15:
+                        spots.append((g0 + w / 2, w))
+                elif i == len(gaps) - 1:
+                    if w >= 0.15:
+                        spots.append((g1 - w / 2, w))
+                elif w >= 0.15:
+                    spots.append(((g0 + g1) / 2, w))
+        else:
+            nb = max(1, int(round(length / max(1.5, G["bay"]))))
+            for i in range(nb + 1):
+                c = min(max(amin + length * i / nb, amin + pw / 2), amax - pw / 2)
+                spots.append((c, pw))
+        for c, w in spots:
+            add_obox(bm, o + u * c + n * (G["pd"] / 2) + Vector((0, 0, (z_g + zmax) / 2)), u, ay, w, G["pd"], zmax - z_g, mat, skip=("+y",))
+    if mode in (1, 3):
+        nfl = int(round((zmax - zmin) / fh))
+        for k in range(1, nfl):
+            if k % int(G["every"]) or (shop and k == 1):
+                continue
+            line = zmin + k * fh
+            if any(op[2] < line - 0.01 and op[3] > line + 0.01 for op in ops):
+                continue                      # una abertura alta cruza la línea de piso
+            below = max([op[3] for op in ops if line - fh < op[3] <= line + 0.01] or [zmin])
+            hs = min(G["sh"], line - 0.02 - below - 0.03)
+            if hs < 0.12:
+                continue
+            add_obox(bm, o + u * ((amin + amax) / 2) + n * (G["sd"] / 2) + Vector((0, 0, line - 0.02 - hs / 2)), u, ay,
+                     length, G["sd"], hs, mat, skip=("+y",))
+
+
 def build_wall(bm, pts, n, p, wid, lod, cfg=None):
     """Una pared de la forma: se corta en grilla, las aberturas se hunden y se agregan balcones."""
     _L0 = look_cfg(p, cfg)
@@ -4135,6 +4351,15 @@ def build_wall(bm, pts, n, p, wid, lod, cfg=None):
     G = porch_cfg(p, cfg, n, zmin, amax - amin)
     if G and lod <= 2:
         add_porch(bm, o, u, n, ops, G, lod, amin, amax, zmin, fh)
+
+    if lod <= 1:       # planta comercial y retícula estructural (relieve sobre la pared; el LOD2 no los lleva)
+        ops_all = list(ops) + (list(ops_q) if cut else [])
+        SH = group_on(p, cfg, "sh", n, zmin)
+        if SH and any(op[4] == MAT["gls"] for op in ops_all):
+            _add_shopfront(bm, o, u, n, p, SH, ops_all, amin, amax, zmin, fh)
+        GR = group_on(p, cfg, "gr", n, zmin)
+        if GR:
+            _add_grid(bm, o, u, n, p, GR, ops_all, amin, amax, zmin, zmax, fh, bool(SH))
 
     run_bals = [b for b in bals if b[5] and b[5].get("bal_run")]
     bals = [b for b in bals if not (b[5] and b[5].get("bal_run"))]
@@ -5186,6 +5411,8 @@ def _props_to_params(s, seed=None):
         "bake_ao_str": float(s.bake_ao_str), "bake_dist": float(s.bake_dist), "bake_samples": int(s.bake_samples),
         "bake_margin": int(s.bake_margin), "bake_share": bool(s.bake_share), "bake_share_loose": float(s.bake_share_loose), "bake_share_area": float(s.bake_share_area), "bake_roof_wt": float(s.bake_roof_wt), "bake_align": bool(s.bake_align), "bake_align_x": bool(s.bake_align_x), "uv_smart": bool(s.uv_smart), "uv_group": bool(s.uv_group), "uv_grid": bool(s.uv_grid), "uv_same_density": bool(s.uv_same_density), "uv_c_wall": float(s.uv_c_wall), "uv_c_trim": float(s.uv_c_trim), "uv_c_roof": float(s.uv_c_roof), "uv_c_door": float(s.uv_c_door), "uv_c_gar": float(s.uv_c_gar), "uv_c_rail": float(s.uv_c_rail), "uv_pins": s.uv_pins, "tex_share_lods": bool(s.tex_share_lods),
         "tex_share_asset": s.tex_share_asset.strip(),
+        "groups": {key: {**{k: int(getattr(s, f"{key}_{k}_g")) for k in g["ints"]},
+                         **{k: float(getattr(s, f"{key}_{k}_g")) for k in g["floats"]}} for key, g in NEW_GROUPS.items()},
         "porch": {"on": bool(s.por_on_g), "walls": int(s.por_walls_g),
                   **{k: int(getattr(s, "por_" + k + "_g")) for k in PORCH_INTS if k != "on"},
                   **{k: float(getattr(s, "por_" + k + "_g")) for k in PORCH_FLOATS}},
@@ -9401,6 +9628,11 @@ WALL_GROUPS = {
 }
 
 
+for _k, _g in NEW_GROUPS.items():
+    WALL_GROUPS[_k] = dict(flag=_g["flag"], use=_g["use"], ints={f"{_k}_{n_}": _g["pre"] + n_ for n_ in _g["ints"]},
+                           floats={f"{_k}_{n_}": _g["pre"] + n_ for n_ in _g["floats"]})
+
+
 def _edit_shape_obj(context):
     """El objeto forma si está en modo edición; si no, None."""
     s = context.scene.cs2_building
@@ -9662,6 +9894,23 @@ def _install_porch_props():
 
 
 _install_porch_props()
+
+
+def _install_group_props():
+    """Propiedades del edificio (<clave>_<k>_g) y de la pared (<clave>_<k>) de los grupos de la tabla NEW_GROUPS."""
+    wa = CS2WallProps.__annotations__
+    ba = CS2BuildingProps.__annotations__
+    for key, g in NEW_GROUPS.items():
+        wa[g["use"]] = BoolProperty(name="Personalizar " + g["label"].lower(), default=False, update=_wall_update(key))
+        for k, (label, items, d) in g["ints"].items():
+            ba[f"{key}_{k}_g"] = EnumProperty(name=label, default=str(d), items=items, update=_on_change)
+            wa[f"{key}_{k}"] = EnumProperty(name=label, default=str(d), items=items, update=_wall_update(key))
+        for k, (label, lo, hi, d) in g["floats"].items():
+            ba[f"{key}_{k}_g"] = FloatProperty(name=label, default=d, min=lo, max=hi, update=_on_change)
+            wa[f"{key}_{k}"] = FloatProperty(name=label, default=d, min=lo, max=hi, update=_wall_update(key))
+
+
+_install_group_props()
 
 
 _MATPREV = {"pcoll": None, "items": [("", "(sin biblioteca)", "")], "sets": {}, "root": None, "folders": [], "cache": {}}
@@ -9958,6 +10207,15 @@ def load_wall_ui(context):
         for k in PORCH_NUMS:
             lay_ = lays.get("cs2_o_" + k)
             setattr(w, "por_" + k, float(f[lay_]) if (on and lay_ is not None) else PORCH_DEF[k])
+        for key, g in NEW_GROUPS.items():
+            on_ = bool(fl & g["flag"])
+            setattr(w, g["use"], on_)
+            for k, (_l, _i, d) in g["ints"].items():
+                lay_ = lays.get(g["pre"] + k)
+                setattr(w, f"{key}_{k}", str(int(f[lay_])) if (on_ and lay_ is not None) else str(d))
+            for k, (_l, _lo, _hi, d) in g["floats"].items():
+                lay_ = lays.get(g["pre"] + k)
+                setattr(w, f"{key}_{k}", float(f[lay_]) if (on_ and lay_ is not None) else d)
     finally:
         _WALL_LOCK[0] = False
 
@@ -13032,6 +13290,13 @@ class CS2_PT_rev(bpy.types.Panel):
             if s.slt_mode_g != "0":
                 for name in ("slt_gap_g", "slt_w_g", "slt_d_g", "slt_mat_g"):
                     box.prop(s, name)
+            for key, g in NEW_GROUPS.items():
+                box = lay.box()
+                box.label(text=g["label"], icon=g["icon"])
+                box.prop(s, f"{key}_on_g", text="")
+                if getattr(s, f"{key}_on_g") != "0":
+                    for k in [k for k in g["ints"] if k != "on"] + list(g["floats"]):
+                        box.prop(s, f"{key}_{k}_g")
         else:
             w = context.scene.cs2_wall
             box = lay.box()
@@ -13042,9 +13307,11 @@ class CS2_PT_rev(bpy.types.Panel):
             row.label(text="Elegir las del material:")
             for k_, lab_ in (("1", "A"), ("2", "B"), ("3", "C"), ("4", "D")):
                 row.operator("cs2.sel_wall_mat", text=lab_).mat = k_
-            for use, names, title in (("use_pan", ("pan_mode", "pan_mat", "pan_pad", "pan_prob"), "Paños de color"),
+            for use, names, title in (("use_pan", ("pan_mode", "pan_mat", "pan_pad", "pan_prob"), "Paños de color y crujías"),
                                       ("use_cas", ("cas_w", "cas_d", "cas_mat"), "Marcos salientes"),
-                                      ("use_slt", ("slt_mode", "slt_gap", "slt_w", "slt_d", "slt_mat"), "Lamas")):
+                                      ("use_slt", ("slt_mode", "slt_gap", "slt_w", "slt_d", "slt_mat"), "Lamas"),
+                                      *[(g["use"], tuple(f"{key}_{k}" for k in list(g["ints"]) + list(g["floats"])), g["label"])
+                                        for key, g in NEW_GROUPS.items()]):
                 box = lay.box()
                 box.prop(w, use, text=title)
                 col = box.column(align=True)
@@ -15245,6 +15512,20 @@ def _componentes():
                       [_F("slt_mode_g", "slt_mode"), _F("slt_gap_g", "slt_gap", vis=lambda o: _slt_on(o)),
                        _F("slt_w_g", "slt_w", vis=lambda o: _slt_on(o)), _F("slt_d_g", "slt_d", vis=lambda o: _slt_on(o)),
                        _F("slt_mat_g", "slt_mat", vis=lambda o: _slt_on(o))], "slt")]),
+        dict(key="grid", label="Retícula", icon="MOD_LATTICE",
+             wall_groups=[("gr", "use_gr", None)],
+             desc="Retícula estructural: pilastras y losas en relieve con el relleno hundido",
+             groups=[("Retícula estructural", [_F("gr_on_g", "gr_on"), _F("gr_walls_g", None, vis=lambda o: o.alcance == "ALL"),
+                                               _F("gr_mat_g", "gr_mat", vis=lambda o: _val(o, "gr_on") != "0"),
+                                               _F("gr_every_g", "gr_every", vis=lambda o: _val(o, "gr_on") in ("1", "3"))], None),
+                     ("Medidas", [_F(f"gr_{k}_g", f"gr_{k}", vis=lambda o: _val(o, "gr_on") != "0") for k in NEW_GROUPS["gr"]["floats"]], None)]),
+        dict(key="shop", label="Planta comercial", icon="SHADING_RENDERED",
+             wall_groups=[("sh", "use_sh", None)],
+             desc="Planta baja comercial: vidriera con pilares, cartel, toldos y acceso hundido",
+             groups=[("Planta baja comercial", [_F("sh_on_g", "sh_on"), _F("sh_walls_g", None, vis=lambda o: o.alcance == "ALL")], None),
+                     ("Partes", [_F(f"sh_{k}_g", f"sh_{k}", vis=lambda o: _val(o, "sh_on") != "0") for k in ("pmat", "smat", "aw")]
+                      + [_F("sh_awmat_g", "sh_awmat", vis=lambda o: _val(o, "sh_on") != "0" and _val(o, "sh_aw") != "0")], None),
+                     ("Medidas", [_F(f"sh_{k}_g", f"sh_{k}", vis=lambda o: _val(o, "sh_on") != "0") for k in NEW_GROUPS["sh"]["floats"]], None)]),
         dict(key="roof", label="Techo", icon="HOME", roof=True,
              desc="Techo: modelo, forma, aleros, cubierta, buhardillas y chimeneas",
              groups=_roof_groups()),

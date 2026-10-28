@@ -1,6 +1,6 @@
 # CS2 Generador de Edificios (add-on de Blender)
 
-Add-on de un solo archivo (`cs2_edificio_addon.py`, v2.79, ~15 900 líneas) que genera edificios low-poly
+Add-on de un solo archivo (`cs2_edificio_addon.py`, v2.80, ~16 300 líneas) que genera edificios low-poly
 para Cities: Skylines 2 (y CS1) con LODs, UV, texturas y exportación FBX. Blender 4.2+.
 
 ## Cómo trabajar con Leo
@@ -11,7 +11,7 @@ para Cities: Skylines 2 (y CS1) con LODs, UV, texturas y exportación FBX. Blend
 
 ## Pruebas (headless, sin abrir Blender)
     pip install bpy numpy pillow
-    python3 tests/run_tests.py                 # todo, ~11 min, 45 casos
+    python3 tests/run_tests.py                 # todo, ~11 min, 48 casos
     CS2_PERF_SCALE=2 python3 tests/run_tests.py perf_big   # si el equipo es el doble de lento que el de Leo
     python3 tests/run_tests.py roof_join scope_sync
     python3 tests/run_tests.py --update-baselines   # solo si la mejora es a propósito
@@ -48,7 +48,7 @@ para Cities: Skylines 2 (y CS1) con LODs, UV, texturas y exportación FBX. Blend
   caché por cadena y LOD) y a cada faceta le da las que caen en ella (se corren hacia adentro si cruzan el borde; una ventana se angosta
   hasta 0,6 m si la faceta es corta; puertas y balcones solo en facetas que miran al frente, salvo «siempre»).
 - Límite: una faceta tiene que medir al menos 0,6 m + 0,24 m para una ventana angosta y ~1,5 m para una normal. Los muros cortina y las
-  cornisas siguen siendo por faceta. Falta: retícula estructural, planta baja comercial.
+  cornisas siguen siendo por faceta. 
 - `cs2.curve_select` (botón junto al ángulo) elige en la forma las paredes detectadas como curva.
 
 ## Crujías y balcón corrido (v2.79)
@@ -61,6 +61,17 @@ para Cities: Skylines 2 (y CS1) con LODs, UV, texturas y exportación FBX. Blend
   de facetas que llevan balcón arma la franja de todo el tramo (`_emit_chain_runs`, con `facets` guardado en `cfg["_chain"]`);
   las demás no dibujan balcones propios.
 
+## Retícula estructural y planta baja comercial (v2.80)
+- Dos grupos de ajustes definidos por tabla (`NEW_GROUPS`: banderas `FLAG_GRID`/`FLAG_SHOP`, propiedades `gr_<k>_g`/`sh_<k>_g` del edificio y
+  `gr_<k>`/`sh_<k>` de la pared, atributos de cara `cs2_gr_*`/`cs2_sh_*`). `group_cfg`/`group_on` resuelven lo que le toca a una pared;
+  `_install_group_props`, `WALL_GROUPS`, `load_wall_ui`, el panel Paredes y los cuadros «Retícula»/«Planta comercial» salen de la misma tabla.
+  Para sumar otro grupo parecido alcanza con una entrada nueva en `NEW_GROUPS`.
+- Retícula (`_add_grid`): pilastras entre las columnas de aberturas (de piso a techo; sobre la vidriera si la pared la lleva) y losas en
+  los frentes de piso (cada 1 a 3 pisos), cajas en relieve (`add_obox`) con el material elegido. LOD0 y LOD1.
+- Planta comercial: `_shop_ops` (dentro de `shape_openings`) reemplaza las ventanas del piso bajo por tramos de vidrio liso (`MAT["gls"]`, sin
+  estilo de ventana: `style_for` y `pieces_for` devuelven nada para `gls`) entre pilares, con el acceso dentro; `_add_shopfront` agrega pilares
+  en los huecos entre tramos, la banda de cartel y toldos (`_add_awning`). Sobre una curva, `_chain_openings` usa un tramo por faceta.
+
 ## Herramientas de revisión (headless)
 - `tools/hojas_componentes.py <carpeta> <window|door|balcony>`: hojas de contacto con todos los estilos incluidos.
 - `tools/render_edificio.py <salida.png> [giro] [giro_pared_frontal]`: edificio con ladrillo y vista rápida para ver el giro.
@@ -68,7 +79,7 @@ para Cities: Skylines 2 (y CS1) con LODs, UV, texturas y exportación FBX. Blend
 - `comp.py` es una copia vieja del bloque de componentes que ya vive dentro de `cs2_edificio_addon.py`: no se importa en ningún lado.
 
 ## Estado y pendientes
-- 45/45 pruebas OK en v2.79 (`perf_big` con `CS2_PERF_SCALE` en equipos lentos).
+- 48/48 pruebas OK en v2.80 (`perf_big` con `CS2_PERF_SCALE` en equipos lentos).
 - Hecho en v2.77: errores silenciosos al informe (quedan solo los de la barra de progreso/redibujo y `ValueError` esperados de `bm.faces.new`),
   giro de texturas, material y giro por pared, antepechos macizos sin z-fighting, pruebas nuevas (rotación, materiales, auditoría, recorrido).
 - Visto en la revisión de componentes, sin tocar: las ventanas y puertas con forma (arco, círculo, óvalo...) se hunden en un nicho
