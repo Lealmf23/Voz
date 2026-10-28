@@ -2886,12 +2886,64 @@ def porch_cfg(p, cfg, n, zmin, length):
     return g if length >= 1.5 else None
 
 
+def _bay_plan(p, wid, ops, L, wins, amin, amax, zmin, zmax, fh, mode):
+    """Crujías: columnas enteras de otro material que siguen cada columna de ventanas de punta a punta (sobre la planta baja
+    si esta lleva otro material). Los huecos de las ventanas de la columna comparten el paño, así sus jambas también cambian.
+    {índice de abertura: (material, (a0, a1, z0, z1))}."""
+    cols = {}
+    for k in wins:
+        a0, a1 = ops[k][:2]
+        c = cols.setdefault(round(a0, 2), [a0, a1, []])
+        c[1] = max(c[1], a1)
+        c[2].append(k)
+    keys = sorted(cols)
+    if not keys:
+        return {}
+    z0 = zmin + (max(1, int(L.get("ground_n", 1))) * fh if int(L.get("ground_mat", 0)) else 0.0)
+    if z0 >= zmax - 0.3:
+        return {}
+    pad, nk, used, plan = L["pan_pad"], len(keys), 0, {}
+    for i, key in enumerate(keys):
+        a0, a1, ks = cols[key]
+        if mode == 6:
+            use = i % 2 == 0
+        elif mode == 7:
+            use = i % 3 == 0
+        elif mode == 8:
+            use = i in (0, nk - 1)
+        else:
+            use = rng_for(p, "bay", wid, i).random() < L["pan_prob"]
+        if not use:
+            continue
+        lo, hi = a0 - pad, a1 + pad
+        if i > 0:
+            lo = max(lo, (cols[keys[i - 1]][1] + a0) / 2)           # dos crujías vecinas no se pisan
+        if i < nk - 1:
+            hi = min(hi, (a1 + cols[keys[i + 1]][0]) / 2)
+        lo, hi = max(amin, lo), min(amax, hi)
+        if hi - lo < 0.2:
+            continue
+        pm = int(L["pan_mat"])
+        if pm == 4:
+            name = "facb" if used % 2 == 0 else "facc"
+        elif pm == 5:
+            name = ("facb", "facc", "facd")[rng_for(p, "baym", wid, i).randrange(3)]
+        else:
+            name = PAN_MATS.get(pm, "facb")
+        used += 1
+        for k in ks:
+            plan[k] = (MAT[name], (lo, hi, z0, zmax))
+    return plan
+
+
 def panel_plan(p, wid, ops, L, amin, amax, zmin, zmax, fh):
     """Paños de color alrededor de las ventanas: {índice de abertura: (material, (a0, a1, z0, z1))}."""
     mode = int(L["pan_mode"])
     if mode <= 1:
         return {}
     wins = [k for k, op in enumerate(ops) if op[4] == MAT["glass"] and op[1] - op[0] > 0.4]
+    if mode >= 6:
+        return _bay_plan(p, wid, ops, L, wins, amin, amax, zmin, zmax, fh, mode)
     colkeys = sorted({round(ops[k][0], 2) for k in wins})
     plan = {}
     for k in wins:
@@ -3515,7 +3567,7 @@ def _wall_cut(bm, pts, n, p, cfg, ops, depths, pans, cut, o, u, v0, zmin, zmax, 
     Devuelve False si la cara de la pared no se pudo crear."""
     zax = Vector((0, 0, 1))
     tmp = bmesh.new()
-    outline = _wall_is_rect(pts, v0, u, amin, amax, zmin, zmax) if (ops and cut) else None
+    outline = _wall_is_rect(pts, v0, u, amin, amax, zmin, zmax) if ((ops and cut) or pans) else None
     rect_wall = outline is not None
     if not rect_wall:
         try:
@@ -3530,7 +3582,7 @@ def _wall_cut(bm, pts, n, p, cfg, ops, depths, pans, cut, o, u, v0, zmin, zmax, 
     if rect_wall:
         # pared rectangular: el mínimo de caras. Cada abertura es una sola cara; el resto se arma con tiras que solo
         # se cortan donde hace falta (laterales de alto completo, arriba y abajo de cada abertura)
-        holes, free = _wall_pieces(amin, amax, zmin, zmax, ops, pans, ground_h if ground_mat is not None else None)
+        holes, free = _wall_pieces(amin, amax, zmin, zmax, ops if cut else [], pans, ground_h if ground_mat is not None else None)
         rects = [(h[1], h[2], h[3], h[4], ("h", h[0])) for h in holes] + [(f[0], f[1], f[2], f[3], ("f", f[4])) for f in free]
         made = _wall_rect_faces(tmp, o, u, n, rects, outline)
         groups = {}
@@ -3870,7 +3922,8 @@ def build_wall(bm, pts, n, p, wid, lod, cfg=None):
     if ground_mat == base_mat:
         ground_mat = None
     ground_h = fh * max(1, int(L.get("ground_n", 1)))
-    pans = panel_plan(p, wid, ops, L, amin, amax, zmin, zmax, fh) if lod == 0 else {}
+    # los paños de las ventanas solo van en LOD0; las crujías (columnas enteras) en todos los LOD, así el color no salta al alejarse
+    pans = panel_plan(p, wid, ops, L, amin, amax, zmin, zmax, fh) if (lod == 0 or int(L["pan_mode"]) >= 6) else {}
     # LOD0 y LOD1 (niveles 0 y 1) cortan las aberturas de verdad; los niveles 2 y 3 usan cuadros pegados
     cut = lod == 0 or (lod == 1 and p.get("lod1_tier", 0) <= 1)
     cs1 = bool(p.get("_cs1"))   # malla para Cities: Skylines 1: ventanas, puertas y marcos van en la textura
@@ -8798,7 +8851,11 @@ DORMER_ITEMS = [("0", "Sin buhardillas", ""), ("1", "Una agua", "Techito de una 
                 ("4", "Arqueada (bóveda)", "Techo curvo")]
 PAN_MODE_ITEMS = [("1", "Ninguno", ""), ("2", "Al azar", "Algunas ventanas con paño de color, otras no"),
                   ("3", "Ajedrez", "Alternado como tablero"), ("4", "Columnas alternas", "Una columna sí y otra no"),
-                  ("5", "Todas", "Todas las ventanas con paño")]
+                  ("5", "Todas", "Todas las ventanas con paño"),
+                  ("6", "Crujías alternas", "Una columna de ventanas sí y otra no, de color y de punta a punta de la pared"),
+                  ("7", "Crujías cada tres", "Una columna de cada tres, de punta a punta de la pared"),
+                  ("8", "Crujías de los bordes", "Solo la primera y la última columna, de punta a punta"),
+                  ("9", "Crujías al azar", "Columnas enteras al azar (según la proporción)")]
 PAN_MAT_ITEMS = [("1", "Material B", ""), ("2", "Material C", ""), ("3", "Material D", ""),
                  ("4", "B y C alternados", ""), ("5", "B, C y D al azar", "")]
 SURF_MAT_ITEMS = [("1", "Molduras", ""), ("2", "Fachada (A)", ""), ("3", "Material B", ""),
@@ -12812,12 +12869,12 @@ class CS2_PT_rev(bpy.types.Panel):
                 box.prop(s, "ground_n_g")
             box.prop(s, "frm_mat_g")
             box = lay.box()
-            box.label(text="Paños de color alrededor de ventanas", icon="MATERIAL")
+            box.label(text="Paños de color y crujías", icon="MATERIAL")
             box.prop(s, "pan_mode_g", text="")
             if s.pan_mode_g != "1":
                 box.prop(s, "pan_mat_g")
                 box.prop(s, "pan_pad_g")
-                if s.pan_mode_g == "2":
+                if s.pan_mode_g in ("2", "9"):
                     box.prop(s, "pan_prob_g")
             box = lay.box()
             box.label(text="Marcos salientes en ventanas", icon="MOD_WIREFRAME")
@@ -15033,10 +15090,10 @@ def _componentes():
              wall_modes=[("cs2_f_mat", "f_mat"), ("cs2_f_rot", "f_rot")],
              groups=[("Materiales", [_F("wall_mat_g", "f_mat"), _F(None, "f_rot"), _F("ground_mat_g", None),
                                      _F("ground_n_g", None, vis=lambda o: o.ground_mat_g != "0"), _F("frm_mat_g", None)], None),
-                     ("Paños de color alrededor de ventanas",
+                     ("Paños de color y crujías",
                       [_F("pan_mode_g", "pan_mode"), _F("pan_mat_g", "pan_mat", vis=lambda o: _pan_on(o)),
                        _F("pan_pad_g", "pan_pad", vis=lambda o: _pan_on(o)),
-                       _F("pan_prob_g", "pan_prob", vis=lambda o: _pan_on(o) and _pan_mode(o) == "2")], "pan"),
+                       _F("pan_prob_g", "pan_prob", vis=lambda o: _pan_on(o) and _pan_mode(o) in ("2", "9"))], "pan"),
                      ("Marcos salientes en ventanas",
                       [_F("cas_w_g", "cas_w"), _F("cas_d_g", "cas_d", vis=lambda o: _cas_on(o)),
                        _F("cas_mat_g", "cas_mat", vis=lambda o: _cas_on(o))], "cas"),

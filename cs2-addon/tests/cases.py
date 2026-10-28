@@ -1607,6 +1607,70 @@ def case_curve_walls():
     result(ventanas=res[25.0][0][0], balcones=res[25.0][0][1])
 
 
+def case_bays():
+    """Crujías: columnas enteras de otro material que siguen las columnas de ventanas, de punta a punta de la pared (no solo alrededor de
+    cada ventana), en LOD0 y LOD1."""
+    import math
+    s = setup("BOX", "FLAT", 20, 12, 4, styles=False)
+    FB = a.MAT["facb"]
+    GL = a.MAT["glass"]
+
+    def frente(o, mat):
+        return [p for p in o.data.polygons if p.material_index == mat and p.normal.y < -0.9]
+
+    def tramos(o, mat):
+        me = o.data
+        ivs = []
+        zmin, zmax = 1e9, -1e9
+        for p in frente(o, mat):
+            vs = [me.vertices[i].co for i in p.vertices]
+            ivs.append((min(v.x for v in vs), max(v.x for v in vs)))
+            zmin = min(zmin, min(v.z for v in vs))
+            zmax = max(zmax, max(v.z for v in vs))
+        ivs.sort()
+        out = []
+        for lo, hi in ivs:
+            if out and lo <= out[-1][1] + 0.02:
+                out[-1][1] = max(out[-1][1], hi)
+            else:
+                out.append([lo, hi])
+        return out, zmin, zmax
+
+    bpy.ops.cs2.generate()
+    bpy.ops.cs2.regen_lods()
+    o0 = lod_objs(s)[0]
+    cols = sorted({round(min(o0.data.vertices[i].co.x for i in p.vertices), 1) for p in frente(o0, GL)})
+    check(len(cols) >= 4, f"la pared del frente debería tener varias columnas de ventanas ({len(cols)})")
+    check(not frente(o0, FB), "sin crujías no debe haber material B en el frente")
+    top = max(v.co.z for v in o0.data.vertices)
+    res = {}
+    for modo, esperado in (("6", (len(cols) + 1) // 2), ("7", (len(cols) + 2) // 3), ("8", 2)):
+        s.pan_mode_g = modo
+        s.pan_mat_g = "1"
+        bpy.ops.cs2.generate()
+        bpy.ops.cs2.regen_lods()
+        for lod, o in enumerate(lod_objs(s)[:2]):
+            tr, z0, z1 = tramos(o, FB)
+            check(len(tr) == esperado, f"modo {modo} LOD{lod}: {len(tr)} crujías y debían ser {esperado}")
+            check(z0 < 0.05, f"modo {modo} LOD{lod}: la crujía no arranca en el piso (z={z0:.2f})")
+            check(z1 > top - 1.6, f"modo {modo} LOD{lod}: la crujía no llega arriba (z={z1:.2f}, techo {top:.2f})")
+        res[modo] = esperado
+    # el modo de siempre (columnas alternas alrededor de la ventana) no llega al piso: las crujías sí
+    s.pan_mode_g = "4"
+    bpy.ops.cs2.generate()
+    bpy.ops.cs2.regen_lods()
+    tr, z0, z1 = tramos(lod_objs(s)[0], FB)
+    check(z0 > 0.1, "los paños de siempre no deben llegar al piso")
+    # con otro material en planta baja, las crujías arrancan sobre ella
+    s.pan_mode_g = "6"
+    s.ground_mat_g = "3"
+    bpy.ops.cs2.generate()
+    bpy.ops.cs2.regen_lods()
+    tr, z0, z1 = tramos(lod_objs(s)[0], FB)
+    check(z0 >= s.floor_height - 0.05, f"las crujías deben arrancar sobre la planta baja (z={z0:.2f})")
+    result(ok=True, columnas=len(cols), crujias=res)
+
+
 CASES = {k[5:]: v for k, v in globals().items() if k.startswith("case_")}
 
 if __name__ == "__main__":
