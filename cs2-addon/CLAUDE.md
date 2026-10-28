@@ -1,6 +1,6 @@
 # CS2 Generador de Edificios (add-on de Blender)
 
-Add-on de un solo archivo (`cs2_edificio_addon.py`, v2.78, ~15 700 líneas) que genera edificios low-poly
+Add-on de un solo archivo (`cs2_edificio_addon.py`, v2.79, ~15 900 líneas) que genera edificios low-poly
 para Cities: Skylines 2 (y CS1) con LODs, UV, texturas y exportación FBX. Blender 4.2+.
 
 ## Cómo trabajar con Leo
@@ -11,7 +11,7 @@ para Cities: Skylines 2 (y CS1) con LODs, UV, texturas y exportación FBX. Blend
 
 ## Pruebas (headless, sin abrir Blender)
     pip install bpy numpy pillow
-    python3 tests/run_tests.py                 # todo, ~11 min, 43 casos
+    python3 tests/run_tests.py                 # todo, ~11 min, 45 casos
     CS2_PERF_SCALE=2 python3 tests/run_tests.py perf_big   # si el equipo es el doble de lento que el de Leo
     python3 tests/run_tests.py roof_join scope_sync
     python3 tests/run_tests.py --update-baselines   # solo si la mejora es a propósito
@@ -48,8 +48,18 @@ para Cities: Skylines 2 (y CS1) con LODs, UV, texturas y exportación FBX. Blend
   caché por cadena y LOD) y a cada faceta le da las que caen en ella (se corren hacia adentro si cruzan el borde; una ventana se angosta
   hasta 0,6 m si la faceta es corta; puertas y balcones solo en facetas que miran al frente, salvo «siempre»).
 - Límite: una faceta tiene que medir al menos 0,6 m + 0,24 m para una ventana angosta y ~1,5 m para una normal. Los muros cortina y las
-  cornisas siguen siendo por faceta. Falta: balcón corrido continuo que siga la curva, fachada por crujías, retícula estructural.
+  cornisas siguen siendo por faceta. Falta: retícula estructural, planta baja comercial.
 - `cs2.curve_select` (botón junto al ángulo) elige en la forma las paredes detectadas como curva.
+
+## Crujías y balcón corrido (v2.79)
+- Crujías = modos 6 a 9 de «Paños de color y crujías» (`pan_mode`, global y por pared): `_bay_plan` pinta columnas enteras (de piso a techo,
+  sobre la planta baja si esta lleva otro material) que siguen cada columna de ventanas; los huecos de la columna comparten el paño, así
+  las jambas también cambian. Salen en los tres LOD (en LOD1/LOD2 sin cortar aberturas, `_wall_cut` arma solo las tiras).
+- Balcón corrido = estilo con `bal_run` (presets «Corrido continuo …»). `insert_balcony(..., plan_override=(planta, lados con baranda,
+  lados contra la pared))` deja que `insert_balcony_run` arme una franja que sigue un recorrido y reutilice toda la baranda.
+  Pared recta: una franja por piso desde el primer hasta el último balcón (`_emit_wall_runs`). Curva: la primera faceta de cada tramo
+  de facetas que llevan balcón arma la franja de todo el tramo (`_emit_chain_runs`, con `facets` guardado en `cfg["_chain"]`);
+  las demás no dibujan balcones propios.
 
 ## Herramientas de revisión (headless)
 - `tools/hojas_componentes.py <carpeta> <window|door|balcony>`: hojas de contacto con todos los estilos incluidos.
@@ -58,7 +68,7 @@ para Cities: Skylines 2 (y CS1) con LODs, UV, texturas y exportación FBX. Blend
 - `comp.py` es una copia vieja del bloque de componentes que ya vive dentro de `cs2_edificio_addon.py`: no se importa en ningún lado.
 
 ## Estado y pendientes
-- 43/43 pruebas OK en v2.78 (`perf_big` con `CS2_PERF_SCALE` en equipos lentos).
+- 45/45 pruebas OK en v2.79 (`perf_big` con `CS2_PERF_SCALE` en equipos lentos).
 - Hecho en v2.77: errores silenciosos al informe (quedan solo los de la barra de progreso/redibujo y `ValueError` esperados de `bm.faces.new`),
   giro de texturas, material y giro por pared, antepechos macizos sin z-fighting, pruebas nuevas (rotación, materiales, auditoría, recorrido).
 - Visto en la revisión de componentes, sin tocar: las ventanas y puertas con forma (arco, círculo, óvalo...) se hunden en un nicho

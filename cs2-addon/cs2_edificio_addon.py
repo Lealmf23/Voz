@@ -9,7 +9,7 @@ Después: Vista 3D > tecla N > pestaña "CS2".
 bl_info = {
     "name": "CS2 Generador de Edificios",
     "author": "Leo",
-    "version": (2, 78, 0),
+    "version": (2, 79, 0),
     "blender": (4, 2, 0),
     "location": "Vista 3D > Barra lateral (N) > CS2",
     "description": "Edificios low-poly de todo tipo (residencial, comercial, oficinas, industrial, servicios y emblemáticos) con LODs y FBX para Cities: Skylines 2",
@@ -377,6 +377,7 @@ STYLE_DEFAULT = {
     "bal_sides": True, "bal_cap": True,
     "bal_roof": "NONE",      # NONE AWNING FLAT
     "bal_planter": False, "bal_planter_h": 0.3,
+    "bal_run": False,        # balcón corrido: una sola losa y baranda que une los balcones del piso (y sigue las curvas)
     "bal_bay_h": 2.2,
     "bal_bar_r": 0.014, "bal_post_r": 0.028,   # grosor de los barrotes y de los postes de esquina/extremo
     "bal_cap_w": 0.09, "bal_cap_h": 0.05,      # sección del pasamanos
@@ -1087,11 +1088,15 @@ def _bal_bay(s, plan, inner, fh, lod, face, rod, prism, V3, Y, FAC, GLASS, TRIM,
     prism([(q[0], q[1]) for q in plan], bh - 0.12, bh + 0.08, ROOF)
 
 
-def insert_balcony(bm, st, o, u, n, a_mid, zb, bd=None, bw=None, rail=None, ww=1.3, p=None, lod=0, inset=0.0):
+def insert_balcony(bm, st, o, u, n, a_mid, zb, bd=None, bw=None, rail=None, ww=1.3, p=None, lod=0, inset=0.0, plan_override=None):
     """Balcón de un estilo. Local: x a lo largo de la pared (centro = a_mid), y hacia adentro
-    (el balcón sale hacia -y), z = 0 es el piso del balcón."""
+    (el balcón sale hacia -y), z = 0 es el piso del balcón.
+    plan_override = (planta [(x, t)] antihoraria, índices de los lados con baranda, índices de los lados contra la pared):
+    el balcón corrido arma su propia planta (una franja que sigue varias paredes) y reutiliza toda la baranda."""
     s = dict(STYLE_DEFAULT)
     s.update(st)
+    if plan_override:
+        s["bal_type"], s["bal_support"], s["bal_roof"] = "SLAB", "NONE", "NONE"
     cs1 = bool((p or {}).get("_cs1"))
     solid_mat = MAT["facade"]
     if lod >= 1:  # LOD1: misma silueta con pocos polígonos (baranda maciza, sin apoyos ni adornos)
@@ -1117,14 +1122,18 @@ def insert_balcony(bm, st, o, u, n, a_mid, zb, bd=None, bw=None, rail=None, ww=1
     hw = bw / 2.0
     st_t = s["bal_slab_t"]
     fh = (p or {}).get("floor_h", 3.0)
-    plan = balcony_plan(s["bal_front"], hw, bd)
+    if plan_override:
+        plan = plan_override[0]
+        hw = max(abs(q[0]) for q in plan)
+    else:
+        plan = balcony_plan(s["bal_front"], hw, bd)
     m = len(plan)
     Y = lambda t: -t  # t hacia afuera -> y local
 
     def V3(q, z):
         return (q[0], Y(q[1]), z)
 
-    def prism(poly2, z0, z1, mat, sides=True, skip_back=True):
+    def prism(poly2, z0, z1, mat, sides=True, skip_back=True, skip=()):
         """Prisma vertical sobre una planta (lista de (x,t))."""
         face([V3(q, z1) for q in poly2], mat, (0, 0, 1))
         face([V3(q, z0) for q in poly2], mat, (0, 0, -1))
@@ -1132,7 +1141,7 @@ def insert_balcony(bm, st, o, u, n, a_mid, zb, bd=None, bw=None, rail=None, ww=1
             k = len(poly2)
             for i in range(k):
                 a, b = poly2[i], poly2[(i + 1) % k]
-                if skip_back and i == k - 1:
+                if (skip_back and i == k - 1) or i in skip:
                     continue
                 nx, nt = b[1] - a[1], -(b[0] - a[0])
                 face([V3(a, z0), V3(b, z0), V3(b, z1), V3(a, z1)], mat, (nx, -nt, 0))
@@ -1144,13 +1153,17 @@ def insert_balcony(bm, st, o, u, n, a_mid, zb, bd=None, bw=None, rail=None, ww=1
         _bal_rod(face, a, b, r, mat)
 
     # ---- losa ----
-    prism(plan, -st_t, 0.0, TRIM)
+    prism(plan, -st_t, 0.0, TRIM, skip=set(plan_override[2]) if plan_override else ())
 
     # ---- camino de baranda (línea central, desplazada hacia adentro) ----
     rt = 0.04
     inner = offset_poly([(q[0], q[1]) for q in plan], -rt)
     path = []
-    for i in range(m - 1):  # sin el lado de la pared
+    if plan_override:        # balcón corrido: la baranda va por los lados que se indican (frente y, si hay costados, las tapas)
+        for i in plan_override[1]:
+            path.append((inner[i], inner[(i + 1) % m]))
+    else:
+      for i in range(m - 1):  # sin el lado de la pared
         a, b = inner[i], inner[(i + 1) % m]
         am, bm_ = plan[i], plan[(i + 1) % m]
         midx, midt = (am[0] + bm_[0]) / 2, (am[1] + bm_[1]) / 2
@@ -1317,6 +1330,42 @@ def insert_balcony(bm, st, o, u, n, a_mid, zb, bd=None, bw=None, rail=None, ww=1
     # ---- mirador vidriado ----
     if s["bal_type"] == "BAY":
         _bal_bay(s, plan, inner, fh, lod, face, rod, prism, V3, Y, FAC, GLASS, TRIM, ROOF)
+
+
+def insert_balcony_run(bm, st, pts, normals, zb, bd, rail, p, lod):
+    """Balcón corrido: una sola losa y baranda que siguen un recorrido sobre la pared.
+    pts = puntos (x, y) del recorrido en el plano de la pared, en el sentido de z x n; normals = normal exterior de cada tramo."""
+    k = len(pts) - 1
+    if k < 1:
+        return
+    n0 = Vector((normals[0].x, normals[0].y, 0.0)).normalized()
+    u0 = Vector((0, 0, 1)).cross(n0).normalized()
+    P0 = Vector((pts[0][0], pts[0][1], 0.0))
+
+    def loc(q):
+        d = Vector((q[0], q[1], 0.0)) - P0
+        return (d.dot(u0), d.dot(n0))
+    W, O = [], []
+    for i, q in enumerate(pts):
+        if i == 0:
+            m = normals[0]
+        elif i == k:
+            m = normals[-1]
+        else:
+            m = _miter(normals[i - 1], normals[i])
+        W.append(loc(q))
+        O.append(loc((q[0] + m.x * bd, q[1] + m.y * bd)))
+    # planta antihoraria: extremo final, frente (de atrás hacia adelante) y vuelta por la pared
+    plan = [W[k]] + [O[k - j] for j in range(k + 1)] + [W[j] for j in range(k)]
+    m_ = len(plan)
+    sides = list(range(1, k + 1))
+    if st.get("bal_sides", True):
+        sides = [0] + sides + [k + 1]
+    wall_edges = list(range(k + 2, m_))
+    s2 = dict(st)
+    if lod >= 2:
+        s2["bal_rail"] = "NONE"
+    insert_balcony(bm, s2, P0, u0, n0, 0.0, zb, bd, 1.0, rail, 1.0, p, lod, plan_override=(plan, sides, wall_edges))
 
 
 # ----------------------------------------------------------------------------
@@ -1543,6 +1592,9 @@ def builtin_list():
     B("Balcón profundo balaustres", bal_rail="BALUSTERS", bal_depth=2.0, bal_extra_w=1.4)
     B("Balcón terraza vidrio", bal_rail="GLASS", bal_depth=2.4, bal_extra_w=2.0, bal_slab_t=0.2)
     B("Balcón corrido", bal_rail="BALUSTERS", bal_depth=1.1, bal_extra_w=2.2)
+    B("Corrido continuo vidrio", bal_run=True, bal_rail="GLASS", bal_depth=1.5, bal_cap=True)
+    B("Corrido continuo balaustres", bal_run=True, bal_rail="BALUSTERS", bal_depth=1.3)
+    B("Corrido continuo macizo", bal_run=True, bal_rail="SOLID", bal_depth=1.4)
     B("Balcón corrido vidrio", bal_rail="GLASS", bal_depth=1.3, bal_extra_w=2.4, bal_slab_t=0.14)
     B("Balcón facetado balaustres", bal_front="CHAMFER", bal_rail="BALUSTERS", bal_depth=1.3)
     B("Balcón facetado vidrio", bal_front="CHAMFER", bal_rail="GLASS", bal_depth=1.4)
@@ -2383,11 +2435,19 @@ def group_curved_walls(walls, curve_deg):
             nm += walls[i][1]
         nm = nm.normalized() if nm.length > 1e-6 else walls[ch[0]][1]
         zs = [q.z for q in walls[ch[0]][0]]
+        facets = []
+        for i in ch:        # extremos (x, y) de cada faceta en el sentido de z x n: el balcón corrido los une en una sola franja
+            pts, n, _cfg = walls[i]
+            u = zax.cross(n)
+            a = [q.dot(u) for q in pts]
+            i0, i1 = min(range(len(pts)), key=lambda t: a[t]), max(range(len(pts)), key=lambda t: a[t])
+            facets.append(dict(S=(pts[i0].x, pts[i0].y), E=(pts[i1].x, pts[i1].y), n=n))
         s0 = 0.0
         for pos, i in enumerate(ch):
             pts, n, cfg = walls[i]
             c2 = dict(cfg or {})
-            c2["_chain"] = dict(id=k, idx=pos, count=len(ch), s0=s0, l=lens[pos], L=total, zmin=min(zs), zmax=max(zs), n=nm, wid=900 + k)
+            c2["_chain"] = dict(id=k, idx=pos, count=len(ch), s0=s0, l=lens[pos], L=total, zmin=min(zs), zmax=max(zs), n=nm, wid=900 + k,
+                                facets=facets)
             walls[i] = (pts, n, c2)
             s0 += lens[pos]
     return walls
@@ -2520,6 +2580,11 @@ def _hq(*key):
     return (zlib.crc32(repr(key).encode()) % 10007) / 10007.0
 
 
+def _chain_keep_bal(p, cfg, n):
+    """¿Una faceta de una curva lleva balcones? Si mira al frente, si se pidieron en todas las paredes o si esta los pide siempre."""
+    return n.y < -0.7 or p.get("balcony_walls") == "all" or int(cfg.get("bal_mode", 0)) in (2, 3)
+
+
 def _chain_openings(p, poly, n, lod, cfg, ch):
     """Aberturas de una faceta de una curva: se reparten en la pared desenrollada (todo el arco) y a cada faceta le toca lo que
     cae en ella. Una abertura que cruza el borde se corre hacia adentro de la faceta; si no entra, se descarta.
@@ -2533,7 +2598,7 @@ def _chain_openings(p, poly, n, lod, cfg, ch):
         cache[key] = shape_openings(p, vp, Vector((0.0, -1.0, 0.0)), ch["wid"], lod, base)
     ops, bals, depths = cache[key]
     front = n.y < -0.7
-    keep_bal = front or p.get("balcony_walls") == "all" or int(cfg.get("bal_mode", 0)) in (2, 3)
+    keep_bal = _chain_keep_bal(p, cfg, n)
     keep_door = front or int(cfg.get("door_mode", 0)) == 1
     fh = p["floor_h"]
     sill = max(0.0, p["sill"])
@@ -2571,6 +2636,8 @@ def _chain_openings(p, poly, n, lod, cfg, ch):
     o_bals = []
     for b in bals:
         if round(b[0], 3) in as_window or not keep_bal:
+            continue
+        if b[5] and b[5].get("bal_run"):       # corrido: la losa de todo el piso la arma una sola faceta (_emit_chain_runs)
             continue
         m = next((new for old, new in shifts if abs(old - b[0]) < 0.05), None)
         if m is None or ln - 0.3 < 0.8:
@@ -3898,6 +3965,72 @@ def _wall_balconies_courses(bm, bals, hi_on, q_hi, p, o, u, n, wid, lod, poly, z
                             pass
 
 
+def _run_lod(p, lod, wid, a, zb, hi_on, q_hi):
+    """Nivel de detalle con el que sale un balcón corrido (None = no sale en este LOD)."""
+    if lod == 0:
+        return 0
+    if lod == 1:
+        if p.get("lod1_tier", 0) == 4:
+            return None
+        return 0 if (hi_on and _hq("bal2", wid, round(a, 2), round(zb, 2)) < q_hi) else 1
+    return 2 if _hq("bal", wid, round(a, 2), round(zb, 2)) < min(1.0, float(p.get("_q", 1.0))) else None
+
+
+def _emit_wall_runs(bm, p, run_bals, o, u, n, amin, amax, wid, lod, hi_on, q_hi):
+    """Balcón corrido en una pared recta: por piso, una franja desde el primer balcón hasta el último."""
+    floors = {}
+    for b in run_bals:
+        floors.setdefault(round(b[1], 3), []).append(b)
+    for zb, bs in sorted(floors.items()):
+        st = dict(STYLE_DEFAULT, **bs[0][5])
+        spans = []
+        for b in bs:
+            w = b[3] or (b[6] + st["bal_extra_w"])
+            spans.append((b[0] - w / 2, b[0] + w / 2))
+        a0, a1 = max(amin + 0.1, min(x[0] for x in spans)), min(amax - 0.1, max(x[1] for x in spans))
+        if a1 - a0 < 0.6:
+            continue
+        lv = _run_lod(p, lod, wid, a0, zb, hi_on, q_hi)
+        if lv is None:
+            continue
+        P0, P1 = o + u * a0, o + u * a1
+        insert_balcony_run(bm, st, [(P0.x, P0.y), (P1.x, P1.y)], [n], zb, bs[0][2] or st["bal_depth"], bs[0][4], p, lv)
+
+
+def _emit_chain_runs(bm, p, cfg, ch, wid, lod, hi_on, q_hi):
+    """Balcón corrido en una curva: lo arma la primera faceta de cada tramo seguido de facetas con balcón y recorre todas."""
+    raw = p.get("_chain_cache", {}).get((ch["id"], lod))
+    rb = [b for b in (raw[1] if raw else []) if b[5] and b[5].get("bal_run")]
+    if not rb:
+        return
+    facets = ch["facets"]
+    keeps = [_chain_keep_bal(p, cfg, f["n"]) for f in facets]
+    j = ch["idx"]
+    if not keeps[j] or (j > 0 and keeps[j - 1]):
+        return
+    e = j
+    while e + 1 < len(facets) and keeps[e + 1]:
+        e += 1
+    pts = [facets[j]["S"]] + [facets[i]["E"] for i in range(j, e + 1)]
+    normals = [facets[i]["n"] for i in range(j, e + 1)]
+
+    def shorten(q, r, d):       # acorta el extremo q hacia r en d metros
+        v = Vector((r[0] - q[0], r[1] - q[1]))
+        if v.length < 2 * d + 0.3:
+            return q
+        v.normalize()
+        return (q[0] + v.x * d, q[1] + v.y * d)
+    pts[0] = shorten(pts[0], pts[1], 0.1)
+    pts[-1] = shorten(pts[-1], pts[-2], 0.1)
+    st = dict(STYLE_DEFAULT, **rb[0][5])
+    bd = rb[0][2] or st["bal_depth"]
+    for zb in sorted({round(b[1], 3) for b in rb}):
+        lv = _run_lod(p, lod, wid, ch["s0"], zb, hi_on, q_hi)
+        if lv is None:
+            continue
+        insert_balcony_run(bm, st, pts, normals, zb, bd, rb[0][4], p, lv)
+
+
 def build_wall(bm, pts, n, p, wid, lod, cfg=None):
     """Una pared de la forma: se corta en grilla, las aberturas se hunden y se agregan balcones."""
     _L0 = look_cfg(p, cfg)
@@ -4003,6 +4136,14 @@ def build_wall(bm, pts, n, p, wid, lod, cfg=None):
     if G and lod <= 2:
         add_porch(bm, o, u, n, ops, G, lod, amin, amax, zmin, fh)
 
+    run_bals = [b for b in bals if b[5] and b[5].get("bal_run")]
+    bals = [b for b in bals if not (b[5] and b[5].get("bal_run"))]
+    ch_ = (cfg or {}).get("_chain")
+    if lod <= 2:
+        if ch_:
+            _emit_chain_runs(bm, p, cfg, ch_, wid, lod, hi_on, q_hi)
+        elif run_bals:
+            _emit_wall_runs(bm, p, run_bals, o, u, n, amin, amax, wid, lod, hi_on, q_hi)
     _wall_balconies_courses(bm, bals, hi_on, q_hi, p, o, u, n, wid, lod, poly, zmax, zmin, fh)
 
 
@@ -10349,6 +10490,8 @@ class CS2StyleProps(bpy.types.PropertyGroup):
     bal_cap_h: FloatProperty(name="Alto del pasamanos (m)", default=0.05, min=0.02, max=0.2, update=_style_changed)
     bal_roof: EnumProperty(name="Techo", default="NONE", items=STYLE_BAL_ROOFS, update=_style_changed)
     bal_planter: BoolProperty(name="Macetero", default=False, update=_style_changed)
+    bal_run: BoolProperty(name="Corrido (une los balcones del piso)", default=False, update=_style_changed,
+                          description="Una sola losa y baranda a lo largo de toda la fila de balcones de un piso; en una curva sigue el arco")
     bal_planter_h: FloatProperty(name="Alto del macetero (m)", default=0.3, min=0.1, max=0.8, update=_style_changed)
     bal_bay_h: FloatProperty(name="Alto del mirador (m)", default=2.2, min=1.8, max=3.2, update=_style_changed)
     ed_window: BoolProperty(name="Editar estilo de ventanas", default=False, update=_ed_toggle("window"))
@@ -10559,7 +10702,7 @@ STYLE_DOC = {
     "bal_sides": "Baranda en los costados (true/false)", "bal_cap": "Pasamanos (true/false)",
     "bal_bar_r": "Grosor (radio) de los barrotes (m)", "bal_post_r": "Grosor (radio) de los postes de esquina y extremo (m)",
     "bal_cap_w": "Ancho del pasamanos (m)", "bal_cap_h": "Alto del pasamanos (m)",
-    "bal_roof": "Techo: NONE AWNING FLAT", "bal_planter": "Macetero (true/false)",
+    "bal_roof": "Techo: NONE AWNING FLAT", "bal_planter": "Macetero (true/false)", "bal_run": "Corrido: une los balcones del piso (true/false)",
     "bal_planter_h": "Alto del macetero (m)", "bal_bay_h": "Alto del mirador (m)",
     "cw_mw": "Muro cortina: ancho del módulo (m)", "cw_mh": "Muro cortina: alto del módulo (0 = uno por piso)",
     "cw_pt": "Grosor de los perfiles (m)", "cw_pd": "Saliente de los perfiles (m)",
@@ -10888,6 +11031,7 @@ def _draw_balcony_editor(box, sp):
     sub.label(text="Planta y losa")
     sub.prop(sp, "bal_type")
     sub.prop(sp, "bal_front")
+    sub.prop(sp, "bal_run")
     sub.prop(sp, "bal_depth")
     sub.prop(sp, "bal_extra_w")
     sub.prop(sp, "bal_slab_t")
@@ -14936,7 +15080,7 @@ def _style_groups(kind):
     sc = lambda *n: [("e_" + x) for x in n]
     if kind == "balcony":
         return [
-            ("Planta y losa", sc("bal_type", "bal_front", "bal_depth", "bal_extra_w", "bal_slab_t", "bal_support", "bal_bay_h"), None),
+            ("Planta y losa", sc("bal_type", "bal_front", "bal_run", "bal_depth", "bal_extra_w", "bal_slab_t", "bal_support", "bal_bay_h"), None),
             ("Baranda", sc("bal_rail", "bal_rail_h", "bal_bar_gap", "bal_sides", "bal_cap", "bal_cap_w", "bal_cap_h",
                            "bal_bar_r", "bal_post_r", "bal_planter", "bal_planter_h"), None),
             ("Techo del balcón", sc("bal_roof"), None),

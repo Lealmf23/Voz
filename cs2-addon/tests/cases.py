@@ -1671,6 +1671,71 @@ def case_bays():
     result(ok=True, columnas=len(cols), crujias=res)
 
 
+def _islas_de_losa(o, fh, pisos):
+    """Cantidad de losas de balcón separadas (islas de caras conectadas) a cada altura de piso: caras de losa a la altura del piso
+    de cada balcón (en el material de molduras) que quedan fuera de la pared."""
+    import bmesh
+    bm = bmesh.new()
+    bm.from_mesh(o.data)
+    res = {}
+    for k in range(1, pisos):
+        zb = k * fh
+        faces = [f for f in bm.faces if f.material_index == a.MAT["trim"] and f.normal.z > 0.9 and abs(f.calc_center_median().z - zb) < 0.03]
+        seen = set()
+        n = 0
+        for f in faces:
+            if f.index in seen:
+                continue
+            n += 1
+            stack = [f]
+            seen.add(f.index)
+            while stack:
+                cur = stack.pop()
+                for e in cur.edges:
+                    for g in e.link_faces:
+                        if g.index not in seen and g in faces:
+                            seen.add(g.index)
+                            stack.append(g)
+        res[k] = n
+    bm.free()
+    return res
+
+
+def case_balcony_run():
+    """Balcón corrido: una sola losa por piso en una pared recta y sobre toda una curva, en vez de un balcón por columna."""
+    import math
+    s = setup("BOX", "FLAT", 20, 12, 4, styles=False, balconies="all")
+    fh = s.floor_height
+    res = {}
+    for nombre in ("Balcón vidrio y pasamanos", "Corrido continuo vidrio"):
+        s.balcony_style = nombre
+        bpy.ops.cs2.generate()
+        bpy.ops.cs2.regen_lods()
+        res[nombre] = _islas_de_losa(lod_objs(s)[0], fh, 4)
+    sep, run = res["Balcón vidrio y pasamanos"], res["Corrido continuo vidrio"]
+    for k in (1, 2, 3):
+        check(sep[k] >= 3, f"piso {k}: los balcones sueltos debían ser varios ({sep[k]})")
+        check(run[k] <= 2, f"piso {k}: el balcón corrido debía ser una sola losa en la pared recta ({run[k]})")
+    # curva: círculo de 24 lados (el frente es un solo tramo de facetas)
+    obj = s.shape_object
+    _prisma(obj, [(8 * math.cos(2 * math.pi * i / 24), 8 * math.sin(2 * math.pi * i / 24)) for i in range(24)])
+    s.curve_deg = 25.0
+    out = {}
+    for nombre in ("Balcón vidrio y pasamanos", "Corrido continuo vidrio", "Corrido continuo balaustres", "Corrido continuo macizo"):
+        s.balcony_style = nombre
+        bpy.ops.cs2.generate()
+        bpy.ops.cs2.regen_lods()
+        objs = lod_objs(s)
+        out[nombre] = _islas_de_losa(objs[0], fh, 4)
+        for i, o in enumerate(objs):
+            check(finite_mesh(o.data), f"{nombre} LOD{i}: malla con valores inválidos")
+    for nombre in ("Corrido continuo vidrio", "Corrido continuo balaustres", "Corrido continuo macizo"):
+        for k in (1, 2, 3):
+            check(out[nombre][k] == 1, f"curva, {nombre}, piso {k}: debía ser una sola losa continua ({out[nombre][k]})")
+    check(all(out["Balcón vidrio y pasamanos"][k] >= 3 for k in (1, 2, 3)), "sin corrido la curva debía tener balcones sueltos")
+    result(recto=run, curva=out["Corrido continuo vidrio"])
+
+
 CASES = {k[5:]: v for k, v in globals().items() if k.startswith("case_")}
 
 if __name__ == "__main__":
