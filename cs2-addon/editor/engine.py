@@ -414,9 +414,26 @@ class H(http.server.BaseHTTPRequestHandler):
         pass
 
 
+class Srv(http.server.ThreadingHTTPServer):
+    allow_reuse_address = False      # en Windows, con True otra instancia podía quedarse con las conexiones y el navegador veía una respuesta vacía
+    daemon_threads = True
+
+    def handle_error(self, request, client_address):
+        import traceback
+        traceback.print_exc()
+
+
 if __name__ == "__main__":
-    port = int(sys.argv[sys.argv.index("--port") + 1]) if "--port" in sys.argv else 8765
-    srv = http.server.ThreadingHTTPServer(("127.0.0.1", port), H)
+    port0 = int(sys.argv[sys.argv.index("--port") + 1]) if "--port" in sys.argv else 8765
+    srv = None
+    for port in range(port0, port0 + 20):
+        try:
+            srv = Srv(("127.0.0.1", port), H)
+            break
+        except OSError:
+            print(f"El puerto {port} está ocupado (¿hay otro motor abierto?), pruebo el siguiente…", flush=True)
+    if srv is None:
+        raise SystemExit("No encontré un puerto libre. Cerrá las otras ventanas del motor y probá de nuevo.")
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     print(f"Motor listo en http://127.0.0.1:{port}  (Ctrl+C para cerrar)", flush=True)
     if "--open" in sys.argv:
