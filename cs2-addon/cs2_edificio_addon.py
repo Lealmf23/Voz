@@ -9,7 +9,7 @@ Después: Vista 3D > tecla N > pestaña "CS2".
 bl_info = {
     "name": "CS2 Generador de Edificios",
     "author": "Leo",
-    "version": (2, 77, 0),
+    "version": (2, 78, 0),
     "blender": (4, 2, 0),
     "location": "Vista 3D > Barra lateral (N) > CS2",
     "description": "Edificios low-poly de todo tipo (residencial, comercial, oficinas, industrial, servicios y emblemáticos) con LODs y FBX para Cities: Skylines 2",
@@ -2300,7 +2300,100 @@ def face_cfg(f, lays):
     return cfg
 
 
-def read_shape(obj, recalc=True, fh=None):
+def curved_chains(walls, curve_deg):
+    """Cadenas de paredes vecinas que giran poco entre sí (una curva hecha con facetas): [[índices de `walls` en orden de recorrido]].
+
+    Dos paredes se unen si comparten un borde vertical, son rectángulos de la misma altura, llevan los mismos ajustes y el giro entre
+    sus normales es mayor que 0,3° y no pasa de `curve_deg`. Una cadena no cambia de sentido de giro (una S se parte en dos curvas)."""
+    n_w = len(walls)
+    if curve_deg <= 0 or n_w < 2:
+        return []
+    zax = Vector((0, 0, 1))
+    info = []
+    for pts, n, cfg in walls:
+        u = zax.cross(n)
+        a = [q.dot(u) for q in pts]
+        z = [q.z for q in pts]
+        zmin, zmax = min(z), max(z)
+        rect = len(pts) == 4 and all(min(abs(zz - zmin), abs(zz - zmax)) < 1e-3 for zz in z)
+        i0, i1 = min(range(len(pts)), key=lambda i: a[i]), max(range(len(pts)), key=lambda i: a[i])
+        info.append(dict(rect=rect, zmin=zmin, zmax=zmax, S=Vector((pts[i0].x, pts[i0].y)), E=Vector((pts[i1].x, pts[i1].y)),
+                         n=n, cfg=cfg or {}))
+    link, sign = {}, {}
+    cos_max = math.cos(math.radians(curve_deg))
+    cos_min = math.cos(math.radians(0.3))
+    for i, A in enumerate(info):
+        if not A["rect"]:
+            continue
+        best = None
+        for j, B in enumerate(info):
+            if j == i or not B["rect"] or (A["E"] - B["S"]).length > 2e-3:
+                continue
+            if abs(A["zmin"] - B["zmin"]) > 1e-3 or abs(A["zmax"] - B["zmax"]) > 1e-3 or A["cfg"] != B["cfg"]:
+                continue
+            c = max(-1.0, min(1.0, A["n"].dot(B["n"])))
+            if not (cos_max - 1e-9 <= c <= cos_min):
+                continue
+            if best is None or c > best[0]:
+                best = (c, j)
+        if best is not None:
+            link[i] = best[1]
+            sign[i] = 1 if A["n"].cross(info[best[1]]["n"]).z > 0 else -1
+    targets = set(link.values())
+    seen, chains = set(), []
+
+    def walk(h):
+        ch, cur, sg = [h], h, None
+        seen.add(h)
+        while cur in link and link[cur] not in seen:
+            if sg is None:
+                sg = sign[cur]
+            elif sign[cur] != sg:
+                break
+            cur = link[cur]
+            ch.append(cur)
+            seen.add(cur)
+        return ch
+    for h in range(n_w):
+        if h not in seen and h in link and h not in targets:
+            chains.append(walk(h))
+    for h in range(n_w):          # lo que queda: curvas cerradas (un círculo) o tramos que empiezan tras un cambio de giro
+        if h not in seen and (h in link or h in targets):
+            chains.append(walk(h))
+    return [c for c in chains if len(c) >= 2]
+
+
+def group_curved_walls(walls, curve_deg):
+    """Marca cada pared de una curva con `_chain` (cadena, posición y largo total) para repartir sus aberturas a lo largo del arco."""
+    chains = curved_chains(walls, curve_deg)
+    if not chains:
+        return walls
+    walls = list(walls)
+    zax = Vector((0, 0, 1))
+    for k, ch in enumerate(chains):
+        lens = []
+        for i in ch:
+            pts, n, _cfg = walls[i]
+            u = zax.cross(n)
+            a = [q.dot(u) for q in pts]
+            lens.append(max(a) - min(a))
+        total = sum(lens)
+        nm = Vector((0, 0, 0))
+        for i in ch:
+            nm += walls[i][1]
+        nm = nm.normalized() if nm.length > 1e-6 else walls[ch[0]][1]
+        zs = [q.z for q in walls[ch[0]][0]]
+        s0 = 0.0
+        for pos, i in enumerate(ch):
+            pts, n, cfg = walls[i]
+            c2 = dict(cfg or {})
+            c2["_chain"] = dict(id=k, idx=pos, count=len(ch), s0=s0, l=lens[pos], L=total, zmin=min(zs), zmax=max(zs), n=nm, wid=900 + k)
+            walls[i] = (pts, n, c2)
+            s0 += lens[pos]
+    return walls
+
+
+def read_shape(obj, recalc=True, fh=None, curve_deg=0.0):
     """Lee la malla base en coordenadas del mundo, centrada en XY y apoyada en z=0.
 
     Paredes: caras verticales. Techos: caras que miran hacia arriba.
@@ -2377,6 +2470,7 @@ def read_shape(obj, recalc=True, fh=None):
                                       roof_face_cfg(roof, lays) if lays else None))
     size = Vector((max(xs) - min(xs), max(ys) - min(ys), max(zs) - min(zs)))
     bm.free()
+    walls = group_curved_walls(walls, curve_deg)
     return {"walls": walls, "roofs": roofs, "parapet_edges": parapet_edges, "center": center, "size": size}
 
 
@@ -2426,6 +2520,65 @@ def _hq(*key):
     return (zlib.crc32(repr(key).encode()) % 10007) / 10007.0
 
 
+def _chain_openings(p, poly, n, lod, cfg, ch):
+    """Aberturas de una faceta de una curva: se reparten en la pared desenrollada (todo el arco) y a cada faceta le toca lo que
+    cae en ella. Una abertura que cruza el borde se corre hacia adentro de la faceta; si no entra, se descarta.
+    La pared desenrollada se arma como si mirara al frente; después, cada faceta se queda con puertas y balcones solo si ella
+    misma mira al frente (o si el balcón/puerta se pidió siempre), y en las demás esos huecos pasan a ser ventanas."""
+    cache = p.setdefault("_chain_cache", {})
+    key = (ch["id"], lod)
+    if key not in cache:
+        base = {k: v for k, v in cfg.items() if k != "_chain"}
+        vp = [(0.0, ch["zmin"]), (ch["L"], ch["zmin"]), (ch["L"], ch["zmax"]), (0.0, ch["zmax"])]
+        cache[key] = shape_openings(p, vp, Vector((0.0, -1.0, 0.0)), ch["wid"], lod, base)
+    ops, bals, depths = cache[key]
+    front = n.y < -0.7
+    keep_bal = front or p.get("balcony_walls") == "all" or int(cfg.get("bal_mode", 0)) in (2, 3)
+    keep_door = front or int(cfg.get("door_mode", 0)) == 1
+    fh = p["floor_h"]
+    sill = max(0.0, p["sill"])
+    wh = max(0.4, min(p["win_h"], fh - sill - 0.3))
+    s0, ln = ch["s0"], ch["l"]
+    last = ch["idx"] == ch["count"] - 1
+    amin_f = min(q[0] for q in poly)
+    lo, hi = s0 + 0.12, s0 + ln - 0.12
+    bal_at = {round((b[0]), 3): b for b in bals}
+    o_ops, o_depths, shifts, as_window = [], [], [], set()
+    for op, dep in zip(ops, depths):
+        c = (op[0] + op[1]) / 2
+        if not (s0 <= c < s0 + ln or (last and c <= s0 + ln + 1e-9)):
+            continue
+        w = op[1] - op[0]
+        is_bal = round(c, 3) in bal_at
+        if w > hi - lo + 1e-6:
+            # faceta más corta que la abertura: una ventana se angosta para entrar (mínimo 0,6 m); puertas y balcones no
+            if op[4] != MAT["glass"] or is_bal or hi - lo < 0.6:
+                continue
+            w = hi - lo
+            op = (c - w / 2, c + w / 2) + tuple(op[2:])
+        if op[4] == MAT["door"] and not keep_door:
+            continue
+        na0 = min(max(op[0], lo), hi - w)
+        loc = amin_f + (na0 - s0)
+        new = (loc, loc + w) + tuple(op[2:])
+        if is_bal and not keep_bal:       # sin balcón en esta faceta: el hueco de puerta vidriada pasa a ser una ventana
+            new = (new[0], new[1], op[2] + sill, op[2] + sill + wh, MAT["glass"])
+            dep = p["win_depth"]
+            as_window.add(round(c, 3))
+        o_ops.append(new)
+        o_depths.append(dep)
+        shifts.append((c, loc + w / 2))
+    o_bals = []
+    for b in bals:
+        if round(b[0], 3) in as_window or not keep_bal:
+            continue
+        m = next((new for old, new in shifts if abs(old - b[0]) < 0.05), None)
+        if m is None or ln - 0.3 < 0.8:
+            continue
+        o_bals.append((m, b[1], b[2], b[3] if b[3] is None else min(b[3], ln - 0.3)) + tuple(b[4:]))   # ancho None: lo decide el estilo
+    return o_ops, o_bals, o_depths
+
+
 def shape_openings(p, poly, n, wid, lod, cfg=None):
     """Aberturas de una pared con sus ajustes.
 
@@ -2433,6 +2586,8 @@ def shape_openings(p, poly, n, wid, lod, cfg=None):
     profundidades [una por abertura]).
     """
     cfg = cfg or {}
+    if cfg.get("_chain"):
+        return _chain_openings(p, poly, n, lod, cfg, cfg["_chain"])
     fl = int(cfg.get("flags", 0))
     a_s = [q[0] for q in poly]
     z_s = [q[1] for q in poly]
@@ -5111,7 +5266,7 @@ def load_shape_for(s):
         s.live_update = False
         s.shape_object = obj
         s.live_update = live
-    return read_shape(obj, s.shape_recalc, s.floor_height if s.snap_floors else None)
+    return read_shape(obj, s.shape_recalc, s.floor_height if s.snap_floors else None, s.curve_deg)
 
 
 def regenerate(context, live=False, only=None):
@@ -9005,6 +9160,10 @@ class CS2BuildingProps(bpy.types.PropertyGroup):
                               ("shape", "Forma", "Edificio a partir de una malla base que podés extruir")])
     shape_object: PointerProperty(name="Objeto", type=bpy.types.Object, poll=_poll_mesh, update=_on_change)
     shape_recalc: BoolProperty(name="Corregir normales de la forma", default=True, update=_on_change)
+    curve_deg: FloatProperty(name="Unir curvas hasta (°)", default=25.0, min=0.0, max=60.0, update=_on_change,
+                             description="Las paredes vecinas que giran menos que esto entre sí se tratan como una sola pared curva: ventanas, puertas y "
+                                         "balcones se reparten a lo largo de todo el arco. 0 = cada cara es una pared. "
+                                         "Cada faceta tiene que medir al menos el ancho de la ventana + 0,3 m para recibir una")
     snap_floors: BoolProperty(name="Ajustar alturas a pisos", default=True, update=_on_change,
                               description="Redondea las alturas de la forma a múltiplos de la altura de piso")
     balcony_walls: EnumProperty(name="Balcones en", default="front", update=_on_change,
@@ -12147,6 +12306,9 @@ class CS2_PT_forma(bpy.types.Panel):
             lay.prop(s, "shape_object", text="")
             ui_note(lay, f"{len(s.shape_object.data.polygons)} caras · Tab edita, E extruye")
             _draw_shape_tools(lay, context, s)
+            row = lay.row(align=True)
+            row.prop(s, "curve_deg")
+            row.operator("cs2.curve_select", text="", icon="RESTRICT_SELECT_OFF")
         lay.separator()
         _draw_build_button(lay, s)
         if _main_obj(s) is not None:
@@ -12442,7 +12604,7 @@ def _face_diagnosis(lay, context, s):
         box = lay.box()
         box.label(text=f"Cara activa: {wd:.1f} m de ancho x {ht:.1f} m de alto", icon="INFO")
         if wd < s.win_w + 1.0:
-            box.label(text=f"Muy angosta: pide al menos {s.win_w + 1.0:.1f} m para ventanas.", icon="ERROR")
+            box.label(text=f"Muy angosta: pide al menos {s.win_w + 1.0:.1f} m para ventanas (salvo que sea parte de una curva).", icon="ERROR")
         if ht < s.floor_height - 0.1:
             box.label(text="Más baja que un piso: puerta y ventanas pueden no entrar.", icon="ERROR")
         if len(f.verts) != 4:
@@ -13129,6 +13291,42 @@ class CS2_OT_copy_report(bpy.types.Operator):
         print(txt)
         n = len(_ERRLOG)
         self.report({"INFO"}, "Informe copiado" + (f" ({n} error{'es' if n != 1 else ''} registrado{'s' if n != 1 else ''})" if n else " (sin errores)"))
+        return {"FINISHED"}
+
+
+class CS2_OT_curve_select(bpy.types.Operator):
+    bl_idname = "cs2.curve_select"
+    bl_label = "Ver curvas detectadas"
+    bl_description = "Elige en la forma las paredes que se tratan como curvas (según el ángulo de «Unir curvas hasta»), para comprobar qué se unió"
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        s = context.scene.cs2_building
+        obj = s.shape_object
+        if obj is None or obj.type != "MESH":
+            self.report({"WARNING"}, "Primero elegí o creá una forma")
+            return {"CANCELLED"}
+        if obj.mode != "EDIT":
+            bpy.ops.cs2.edit_shape()
+        bm = bmesh.from_edit_mesh(obj.data)
+        lays = wall_layers(bm)
+        walls, faces = [], []
+        for f in bm.faces:
+            if abs(f.normal.z) < 0.12:
+                nh = Vector((f.normal.x, f.normal.y, 0.0))
+                if nh.length > 1e-6:
+                    walls.append(([v.co.copy() for v in f.verts], nh.normalized(), face_cfg(f, lays)))
+                    faces.append(f)
+        chains = curved_chains(walls, s.curve_deg)
+        for f in bm.faces:
+            f.select_set(False)
+        for ch in chains:
+            for i in ch:
+                faces[i].select_set(True)
+        bm.select_flush_mode()
+        bmesh.update_edit_mesh(obj.data, loop_triangles=False, destructive=False)
+        n = sum(len(c) for c in chains)
+        self.report({"INFO"}, f"{len(chains)} curva(s) con {n} paredes" if chains else "No se detectó ninguna curva con ese ángulo")
         return {"FINISHED"}
 
 
@@ -15417,7 +15615,7 @@ classes = (CS2BuildingProps, CS2WallProps, CS2_OT_generate, CS2_OT_cancel_genera
            CS2_OT_edit_shape, CS2_OT_floor, CS2_OT_split_floors, CS2_OT_select_band,
            CS2_OT_wall_reset, CS2_OT_style_step, CS2_OT_style_folder, CS2_OT_style_reload,
            CS2_OT_thumbs_all, CS2_OT_refresh, CS2_OT_look, CS2_OT_porch, CS2_OT_roof_apply, CS2_OT_roof_clear, CS2_OT_pbr_pick, CS2_OT_pbr_folder, CS2_OT_pbr_clear, CS2_OT_atlas_view, CS2_OT_make_textures,
-           CS2_OT_uv_generate, CS2_OT_bake_ao, CS2_OT_tex_assign, CS2_OT_slot_rot, CS2_OT_sel_wall_mat, CS2_OT_tex_clear, CS2_OT_copy_report, CS2_OT_retexture, CS2StyleProps, CS2_OT_style_load, CS2_OT_style_save, CS2_OT_style_delete, CS2_OT_style_use,
+           CS2_OT_uv_generate, CS2_OT_bake_ao, CS2_OT_tex_assign, CS2_OT_slot_rot, CS2_OT_sel_wall_mat, CS2_OT_curve_select, CS2_OT_tex_clear, CS2_OT_copy_report, CS2_OT_retexture, CS2StyleProps, CS2_OT_style_load, CS2_OT_style_save, CS2_OT_style_delete, CS2_OT_style_use,
            CS2_OT_style_preview, CS2_OT_style_catalog, CS2_OT_style_export, CS2_OT_style_import, CS2_OT_style_refresh, CS2_OT_style_apply,
            CS2_OT_ficha_clip, CS2_OT_ficha_file, CS2_OT_ficha_prompt, CS2_OT_type_template,
            CS2_OT_preview_update, CS2_OT_uv_zone, CS2_OT_uv_pin, CS2_OT_uv_view,

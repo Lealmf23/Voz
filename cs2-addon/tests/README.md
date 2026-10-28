@@ -38,6 +38,7 @@ Se ejecutan con el módulo `bpy` (sin abrir Blender):
 | comp_walls | El cuadro «Paredes» aplica material y giro solo a las paredes elegidas |
 | component_audit | Todas las ventanas, puertas y balcones incluidos: sin caras degeneradas, sin vértices sueltos y sin z-fighting |
 | building_audit | Edificios con cada techo, porche y estilo general incluidos: sin caras degeneradas ni z-fighting (LOD0 y LOD1) |
+| curve_walls | Curvas hechas con facetas: detección por ángulo (círculo, octógono, caja, S) y ventanas/balcones repartidos por el arco; «Ver curvas detectadas» |
 | flow_full | Recorrido completo (crear, personalizar, regenerar, UV, sombras, texturas, exportar) sin errores en el informe |
 | mip_bleed | Con mipmaps (textura achicada) un material no toma el color de su vecino, en el atlas ni en el horneado |
 | quick_view | La vista rápida muestra la textura elegida sin UV ni horneado, se apaga y se actualiza con el botón |

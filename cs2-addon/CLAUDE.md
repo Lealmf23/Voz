@@ -1,6 +1,6 @@
 # CS2 Generador de Edificios (add-on de Blender)
 
-Add-on de un solo archivo (`cs2_edificio_addon.py`, v2.77, ~15 500 líneas) que genera edificios low-poly
+Add-on de un solo archivo (`cs2_edificio_addon.py`, v2.78, ~15 700 líneas) que genera edificios low-poly
 para Cities: Skylines 2 (y CS1) con LODs, UV, texturas y exportación FBX. Blender 4.2+.
 
 ## Cómo trabajar con Leo
@@ -11,7 +11,7 @@ para Cities: Skylines 2 (y CS1) con LODs, UV, texturas y exportación FBX. Blend
 
 ## Pruebas (headless, sin abrir Blender)
     pip install bpy numpy pillow
-    python3 tests/run_tests.py                 # todo, ~11 min, 42 casos
+    python3 tests/run_tests.py                 # todo, ~11 min, 43 casos
     CS2_PERF_SCALE=2 python3 tests/run_tests.py perf_big   # si el equipo es el doble de lento que el de Leo
     python3 tests/run_tests.py roof_join scope_sync
     python3 tests/run_tests.py --update-baselines   # solo si la mejora es a propósito
@@ -40,6 +40,17 @@ para Cities: Skylines 2 (y CS1) con LODs, UV, texturas y exportación FBX. Blend
 - Ángulos que no son múltiplos de 90° agrandan la caja de cada pared en el atlas (baja un poco la nitidez) y en el horneado rozan más
   los bordes de las islas (hasta ~1 % de solape; `tex_rotate_bake` lo tolera hasta 2 %).
 
+## Paredes curvas (v2.78)
+- `curve_deg` (Lote y forma → «Unir curvas hasta», 25° por defecto, 0 = apagado). `read_shape` llama a `group_curved_walls`, que usa
+  `curved_chains`: une paredes vecinas (borde vertical común, rectángulos de igual altura, mismos ajustes) cuyo giro es de 0,3° a `curve_deg`
+  y que no cambian de sentido de giro. Cada pared de la cadena lleva `cfg["_chain"]` (id, posición, largo total).
+- `shape_openings` desvía a `_chain_openings`: arma las aberturas en la pared desenrollada (largo total del arco, mirando al frente, con
+  caché por cadena y LOD) y a cada faceta le da las que caen en ella (se corren hacia adentro si cruzan el borde; una ventana se angosta
+  hasta 0,6 m si la faceta es corta; puertas y balcones solo en facetas que miran al frente, salvo «siempre»).
+- Límite: una faceta tiene que medir al menos 0,6 m + 0,24 m para una ventana angosta y ~1,5 m para una normal. Los muros cortina y las
+  cornisas siguen siendo por faceta. Falta: balcón corrido continuo que siga la curva, fachada por crujías, retícula estructural.
+- `cs2.curve_select` (botón junto al ángulo) elige en la forma las paredes detectadas como curva.
+
 ## Herramientas de revisión (headless)
 - `tools/hojas_componentes.py <carpeta> <window|door|balcony>`: hojas de contacto con todos los estilos incluidos.
 - `tools/render_edificio.py <salida.png> [giro] [giro_pared_frontal]`: edificio con ladrillo y vista rápida para ver el giro.
@@ -47,7 +58,7 @@ para Cities: Skylines 2 (y CS1) con LODs, UV, texturas y exportación FBX. Blend
 - `comp.py` es una copia vieja del bloque de componentes que ya vive dentro de `cs2_edificio_addon.py`: no se importa en ningún lado.
 
 ## Estado y pendientes
-- 42/42 pruebas OK en v2.77 (`perf_big` con `CS2_PERF_SCALE` en equipos lentos).
+- 43/43 pruebas OK en v2.78 (`perf_big` con `CS2_PERF_SCALE` en equipos lentos).
 - Hecho en v2.77: errores silenciosos al informe (quedan solo los de la barra de progreso/redibujo y `ValueError` esperados de `bm.faces.new`),
   giro de texturas, material y giro por pared, antepechos macizos sin z-fighting, pruebas nuevas (rotación, materiales, auditoría, recorrido).
 - Visto en la revisión de componentes, sin tocar: las ventanas y puertas con forma (arco, círculo, óvalo...) se hunden en un nicho

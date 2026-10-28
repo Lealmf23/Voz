@@ -1515,6 +1515,98 @@ def case_building_audit():
     result(edificios=n)
 
 
+def _prisma(obj, pts, alto=12.0):
+    """Reemplaza la malla de la forma por un prisma con ese contorno (antihorario)."""
+    import bmesh
+    area = sum(pts[i][0] * pts[(i + 1) % len(pts)][1] - pts[(i + 1) % len(pts)][0] * pts[i][1] for i in range(len(pts)))
+    if area < 0:
+        pts = pts[::-1]
+    bm = bmesh.new()
+    top = [bm.verts.new((x, y, alto)) for x, y in pts]
+    bot = [bm.verts.new((x, y, 0.0)) for x, y in pts]
+    bm.faces.new(bot[::-1])
+    bm.faces.new(top)
+    for i in range(len(pts)):
+        j = (i + 1) % len(pts)
+        bm.faces.new([bot[i], bot[j], top[j], top[i]])
+    bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
+    bm.to_mesh(obj.data)
+    bm.free()
+    obj.data.update()
+
+
+def _paredes_de(obj):
+    """Lista (puntos, normal, ajustes) de las paredes de una forma, como la arma read_shape."""
+    import bmesh
+    from mathutils import Vector
+    bm = bmesh.new()
+    bm.from_mesh(obj.data)
+    bm.transform(obj.matrix_world)
+    bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
+    out = [([v.co.copy() for v in f.verts], Vector((f.normal.x, f.normal.y, 0.0)).normalized(), None)
+           for f in bm.faces if abs(f.normal.z) < 0.12]
+    bm.free()
+    return out
+
+
+def case_curve_walls():
+    """Curvas hechas con facetas: se detectan por el ángulo entre paredes vecinas y sus ventanas, puertas y balcones se reparten por
+    todo el arco (antes una faceta corta quedaba sin nada)."""
+    import math
+    s = setup("BOX", "FLAT", 16, 16, 4, styles=True)
+    obj = s.shape_object
+    # detección
+    _prisma(obj, [(9 * math.cos(2 * math.pi * i / 24), 9 * math.sin(2 * math.pi * i / 24)) for i in range(24)])
+    w = _paredes_de(obj)
+    ch = a.curved_chains(w, 25.0)
+    check(len(ch) == 1 and len(ch[0]) == 24, f"un círculo de 24 lados debe ser una curva de 24 paredes ({[len(c) for c in ch]})")
+    check(not a.curved_chains(w, 0.0), "con 0° no se unen curvas")
+    check(not a.curved_chains(w, 10.0), "con 10° un giro de 15° por faceta no se une")
+    _prisma(obj, [(9 * math.cos(2 * math.pi * i / 8), 9 * math.sin(2 * math.pi * i / 8)) for i in range(8)])
+    check(not a.curved_chains(_paredes_de(obj), 25.0), "un octógono (45° entre paredes) no es una curva con 25°")
+    _prisma(obj, [(-10, -6), (10, -6), (10, 6), (-10, 6)])
+    check(not a.curved_chains(_paredes_de(obj), 25.0), "una caja (90°) no tiene curvas")
+    # S: un arco que gira a la izquierda y después a la derecha se parte en dos curvas (el sentido de giro cambia)
+    pts = [(0.0, 0.0)]
+    ang = 0.0
+    for k in range(12):
+        ang += math.radians(15) if k < 6 else -math.radians(15)
+        pts.append((pts[-1][0] + 2.0 * math.cos(ang), pts[-1][1] + 2.0 * math.sin(ang)))
+    s_walls = []
+    for i in range(len(pts) - 1):
+        (x0, y0), (x1, y1) = pts[i], pts[i + 1]
+        d = (x1 - x0, y1 - y0)
+        n = a.Vector((d[1], -d[0], 0.0)).normalized()
+        s_walls.append(([a.Vector((x0, y0, 0)), a.Vector((x1, y1, 0)), a.Vector((x1, y1, 9)), a.Vector((x0, y0, 9))], n, None))
+    ch = a.curved_chains(s_walls, 25.0)
+    check(len(ch) == 2 and sorted(len(c) for c in ch) == [6, 6], f"la S debe partirse en dos curvas ({[len(c) for c in ch]})")
+
+    # generación: un círculo de 24 lados (facetas de 2,1 m) recibe ventanas y balcones; con 0° quedaba pelado
+    _prisma(obj, [(8 * math.cos(2 * math.pi * i / 24), 8 * math.sin(2 * math.pi * i / 24)) for i in range(24)])
+    res = {}
+    for deg in (0.0, 25.0):
+        s.curve_deg = deg
+        bpy.ops.cs2.generate()
+        bpy.ops.cs2.regen_lods()
+        res[deg] = [(sum(1 for p in o.data.polygons if p.material_index == a.MAT["glass"]),
+                     sum(1 for p in o.data.polygons if p.material_index == a.MAT["rail"])) for o in lod_objs(s)]
+    check(res[0.0][0][0] == 0, f"sin unir curvas el círculo no debía tener ventanas ({res[0.0][0]})")
+    for lod in range(2):
+        check(res[25.0][lod][0] > 10, f"LOD{lod}: la curva debía tener ventanas ({res[25.0][lod]})")
+    check(res[25.0][0][1] > 0, "la curva debía tener balcones en las facetas que miran al frente")
+    # ninguna ventana queda cruzando dos facetas: todas las caras de vidrio son planas respecto de su pared
+    me = lod_objs(s)[0].data
+    check(all(finite_mesh(o.data) for o in lod_objs(s)), "malla con valores inválidos")
+    # «Ver curvas detectadas» elige las paredes de la curva
+    bpy.ops.cs2.curve_select()
+    import bmesh
+    bm = bmesh.from_edit_mesh(obj.data)
+    sel = [f for f in bm.faces if f.select]
+    check(len(sel) == 24 and all(abs(f.normal.z) < 0.12 for f in sel), f"el botón eligió {len(sel)} caras y debían ser 24 paredes")
+    bpy.ops.cs2.edit_shape()
+    result(ventanas=res[25.0][0][0], balcones=res[25.0][0][1])
+
+
 CASES = {k[5:]: v for k, v in globals().items() if k.startswith("case_")}
 
 if __name__ == "__main__":
