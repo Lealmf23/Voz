@@ -2,115 +2,80 @@
 <html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Editor de edificios CS2</title>
 <style>
-:root{--bg:#1c1f24;--pn:#262a31;--tx:#e8eaed;--mu:#9aa0a6;--ac:#4ea1ff;--ln:#3a3f47}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--tx);font:14px system-ui,sans-serif;display:flex;height:100vh}
-#side{width:270px;background:var(--pn);padding:12px;display:flex;flex-direction:column;gap:10px;overflow:auto;border-right:1px solid var(--ln)}
-h1{font-size:15px;margin:0}h2{font-size:12px;margin:6px 0 0;color:var(--mu);text-transform:uppercase;letter-spacing:.05em}
-button{background:#333a44;color:var(--tx);border:1px solid var(--ln);border-radius:6px;padding:7px 10px;cursor:pointer;font:inherit}
-button.on,button.pri{background:var(--ac);border-color:var(--ac);color:#04121f}button:disabled{opacity:.5}
-label{display:flex;justify-content:space-between;align-items:center;gap:8px}input[type=number]{width:70px;background:#15181c;color:var(--tx);border:1px solid var(--ln);border-radius:4px;padding:4px}
-.row{display:flex;gap:6px;flex-wrap:wrap}.hint{color:var(--mu);font-size:12px;line-height:1.4}
-#views{flex:1;display:grid;grid-template-columns:1fr 1fr;min-width:0}
-#views canvas{width:100%;height:100%;display:block}#plan{border-right:1px solid var(--ln);cursor:crosshair;background:#15181c}
-#stat{font-size:12px;color:var(--mu)}
+:root{--bg:#16181c;--pn:#1f2227;--pn2:#262a31;--ln:#343942;--tx:#e9ecf1;--mu:#98a0ab;--ac:#4ea1ff;--ac2:#2b6fc0;--ok:#4cc38a;--bad:#ef6a5e;--warn:#f0b04a;--r:8px}
+*{box-sizing:border-box}html,body{height:100%}body{margin:0;background:var(--bg);color:var(--tx);font:13px/1.35 system-ui,-apple-system,"Segoe UI",sans-serif;display:grid;grid-template-rows:46px 1fr 28px;grid-template-columns:54px 1fr 310px;grid-template-areas:"top top top" "tools main side" "bot bot bot";overflow:hidden}
+button,select,input{font:inherit;color:inherit}
+button{background:var(--pn2);border:1px solid var(--ln);border-radius:6px;padding:6px 10px;cursor:pointer}
+button:hover{border-color:#566}button:disabled{opacity:.45;cursor:default}
+button.pri{background:var(--ac);border-color:var(--ac);color:#04121f;font-weight:600}button.pri:hover{background:#6bb2ff}
+button.on{background:var(--ac2);border-color:var(--ac)}
+button.ghost{background:transparent;border-color:transparent}button.ghost:hover{background:var(--pn2)}
+select,input[type=number],input[type=text]{background:#14161a;border:1px solid var(--ln);border-radius:6px;padding:5px 7px;min-width:0}
+input[type=number]{width:72px}
+#top{grid-area:top;background:var(--pn);border-bottom:1px solid var(--ln);display:flex;align-items:center;gap:6px;padding:0 10px}
+#top .logo{font-weight:700;letter-spacing:.02em;margin-right:8px}#top .logo b{color:var(--ac)}
+#top .sp{flex:1}.dot{width:9px;height:9px;border-radius:50%;background:var(--bad);display:inline-block;margin-right:6px}.dot.ok{background:var(--ok)}.dot.busy{background:var(--warn)}
+#tools{grid-area:tools;background:var(--pn);border-right:1px solid var(--ln);display:flex;flex-direction:column;gap:4px;padding:8px 5px;align-items:center}
+.tool{width:42px;height:42px;padding:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;font-size:9.5px;color:var(--mu);background:transparent;border-color:transparent}
+.tool svg{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.tool:hover{background:var(--pn2);color:var(--tx)}.tool.on{background:var(--ac2);color:#fff;border-color:var(--ac)}
+.sep{width:30px;height:1px;background:var(--ln);margin:4px 0}
+#main{grid-area:main;display:grid;grid-template-columns:1fr 1fr;position:relative;min-width:0;min-height:0}
+#main.v-plan{grid-template-columns:1fr 0}#main.v-3d{grid-template-columns:0 1fr}
+.vp{position:relative;min-width:0;min-height:0;overflow:hidden}.vp canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
+#planvp{border-right:1px solid var(--ln);background:#111317}
+.vlabel{position:absolute;left:10px;top:8px;font-size:11px;color:var(--mu);pointer-events:none;text-transform:uppercase;letter-spacing:.06em}
+.vbtns{position:absolute;right:8px;top:6px;display:flex;gap:4px}.vbtns button{padding:3px 8px;font-size:11.5px;background:#1f2227cc}
+#hint{position:absolute;left:10px;bottom:8px;right:10px;font-size:12px;color:var(--mu);pointer-events:none;text-shadow:0 1px 3px #000}
+#hint b{color:var(--tx)}
+#side{grid-area:side;background:var(--pn);border-left:1px solid var(--ln);overflow:auto}
+.sec{border-bottom:1px solid var(--ln);padding:10px 12px}.sec h3{margin:0 0 8px;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.07em;color:var(--mu);display:flex;justify-content:space-between;align-items:center}
+.row{display:flex;align-items:center;gap:8px;margin:6px 0}.row>label{flex:1;color:var(--mu)}.row.wrap{flex-wrap:wrap}
+.seg{display:flex}.seg button{border-radius:0;margin-left:-1px;padding:5px 9px}.seg button:first-child{border-radius:6px 0 0 6px;margin:0}.seg button:last-child{border-radius:0 6px 6px 0}
+.sw{width:20px;height:20px;border-radius:5px;border:1px solid #0006;display:inline-block;vertical-align:middle}
+.matbtn{display:flex;align-items:center;gap:6px;padding:5px 8px}
+.pick{display:flex;gap:8px;align-items:center;width:100%;text-align:left;padding:4px 6px}.pick img{width:40px;height:40px;border-radius:5px;object-fit:cover;background:#0004}.pick span{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#cat{display:none;position:absolute;left:0;right:0;bottom:0;height:172px;background:#1f2227f5;border-top:1px solid var(--ln);z-index:5;flex-direction:column}
+#cat.show{display:flex}#cat header{padding:8px 12px 4px;display:flex;gap:10px;align-items:center}#cat header b{font-size:12px}#cat header input{width:200px}
+#cat .grid{display:flex;gap:7px;overflow-x:auto;overflow-y:hidden;padding:2px 12px 10px;flex:1;min-height:0}
+.card{flex:0 0 86px;background:var(--pn2);border:1px solid var(--ln);border-radius:7px;padding:3px;cursor:pointer;text-align:center;font-size:10px;line-height:1.2;color:var(--mu);overflow:hidden;display:flex;flex-direction:column}
+.card img{width:100%;height:78px;object-fit:cover;border-radius:4px;display:block;background:#0004;flex:none}.card:hover{border-color:#789}.card.on{border-color:var(--ac);box-shadow:0 0 0 1px var(--ac);color:var(--tx)}
+.card div{overflow:hidden;margin-top:3px;flex:1}
+#main.catopen #hint{bottom:180px}
+#bot{grid-area:bot;background:var(--pn);border-top:1px solid var(--ln);display:flex;align-items:center;gap:18px;padding:0 12px;color:var(--mu);font-size:12px}#bot b{color:var(--tx);font-weight:600}
+.bar{width:120px;height:6px;border-radius:3px;background:#0005;display:inline-block;vertical-align:middle;margin-left:6px;overflow:hidden}.bar i{display:block;height:100%;background:var(--ok)}
+#toast{position:fixed;left:50%;bottom:44px;transform:translateX(-50%);background:#000c;border:1px solid var(--ln);padding:8px 14px;border-radius:8px;display:none;z-index:20;max-width:70vw}
+#modal{position:fixed;inset:0;background:#0009;display:none;align-items:center;justify-content:center;z-index:30}#modal.show{display:flex}
+#modal .box{background:var(--pn);border:1px solid var(--ln);border-radius:12px;padding:18px;width:460px;max-width:92vw}#modal h2{margin:0 0 10px;font-size:16px}
+.hintline{color:var(--mu);font-size:12px}.kbd{border:1px solid var(--ln);border-bottom-width:2px;border-radius:4px;padding:0 5px;font-size:11px;color:var(--tx)}
+.empty{padding:22px 12px;color:var(--mu);text-align:center}.empty b{color:var(--tx)}
+.spin{display:none;margin-left:8px;width:14px;height:14px;border:2px solid var(--ln);border-top-color:var(--ac);border-radius:50%;animation:sp .7s linear infinite}.spin.on{display:inline-block}@keyframes sp{to{transform:rotate(360deg)}}
 </style></head><body>
-<div id="side">
- <h1>Editor de edificios CS2</h1>
- <div class="hint" id="help">Dibujá la planta: clic para poner esquinas, clic en la primera para cerrar. Se pega a la grilla.</div>
- <h2>Planta</h2>
- <div class="row"><button id="bBox">Caja</button><button id="bL">L</button><button id="bU">U</button><button id="bClear">Borrar</button></div>
- <label>Grilla (m)<input id="snap" type="number" value="1" min="0.25" step="0.25"></label>
- <h2>Edificio</h2>
- <label>Pisos<input id="floors" type="number" value="4" min="1" max="30"></label>
- <label>Alto de piso (m)<input id="fh" type="number" value="3" min="2" step="0.1"></label>
- <button class="pri" id="bBuild" disabled>Crear malla real (Blender)</button>
- <div id="stat">Motor: sin comprobar</div>
- <div class="hint">Izquierda: planta (cuadrícula = 8 m, el tamaño de celda de CS2). Derecha: vista 3D (arrastrar = girar, rueda = zoom, clic derecho = mover).</div>
+<div id="top">
+  <span class="logo">Editor <b>CS2</b></span>
+  <button id="bUndo" title="Deshacer (Ctrl+Z)">↶</button><button id="bRedo" title="Rehacer (Ctrl+Y)">↷</button>
+  <span style="width:8px"></span>
+  <select id="preset" title="Empezar con una planta"><option value="">Plantas rápidas…</option><option value="box">Caja</option><option value="L">En L</option><option value="U">En U</option><option value="T">En T</option><option value="round">Torre redonda</option><option value="curve">Frente curvo</option></select>
+  <button id="bOpen">Abrir</button><button id="bSave">Guardar</button>
+  <span class="sp"></span>
+  <span id="eng"><span class="dot" id="dot"></span><span id="engtxt">Motor…</span></span><span class="spin" id="spin"></span>
+  <button class="pri" id="bExport" style="margin-left:10px">Exportar a CS2</button>
 </div>
-<div id="views"><canvas id="plan"></canvas><canvas id="v3"></canvas></div>
+<div id="tools"></div>
+<div id="main" class="">
+  <div class="vp" id="planvp"><canvas id="plan"></canvas><span class="vlabel">Planta</span></div>
+  <div class="vp" id="v3vp"><canvas id="v3"></canvas><span class="vlabel">Vista 3D</span>
+    <div class="vbtns"><button id="bRoof" class="on" title="Mostrar u ocultar el techo">Techo</button><button id="bFit" title="Centrar la vista">Centrar</button>
+      <span class="seg"><button data-v="plan">Planta</button><button data-v="both" class="on">Ambas</button><button data-v="3d">3D</button></span></div>
+  </div>
+  <div id="cat"><header><b id="catTitle">Catálogo</b><input type="text" id="catQ" placeholder="Buscar…"><span style="flex:1"></span><button class="ghost" id="catX">✕ Cerrar</button></header><div class="grid" id="catGrid"></div></div>
+  <div id="hint"></div>
+</div>
+<div id="side"></div>
+<div id="bot"></div>
+<div id="toast"></div>
+<div id="modal"><div class="box" id="mbox"></div></div>
+<input type="file" id="file" accept=".json" style="display:none">
 <script type="importmap">{"imports":{"three":"./vendor/three.module.min.js"}}</script>
-<script type="module">
-import * as T from "three";
-const $=id=>document.getElementById(id);
-let pts=[], closed=false, hover=null, real=null;
-// ---------- planta 2D ----------
-const pc=$("plan"), pg=pc.getContext("2d"); const view={cx:0,cy:0,s:12}; // px por metro
-const w2s=(x,y)=>[pc.width/2+(x-view.cx)*view.s, pc.height/2-(y-view.cy)*view.s];
-const s2w=(px,py)=>[(px-pc.width/2)/view.s+view.cx,(pc.height/2-py)/view.s+view.cy];
-const snapv=v=>{const g=+$("snap").value||1;return Math.round(v/g)*g};
-function drawPlan(){
-  const r=pc.getBoundingClientRect(); if(pc.width!==r.width|0||pc.height!==r.height|0){pc.width=r.width|0;pc.height=r.height|0}
-  pg.clearRect(0,0,pc.width,pc.height);
-  const [x0,y0]=s2w(0,pc.height),[x1,y1]=s2w(pc.width,0);
-  for(const [step,col] of [[1,"#20242a"],[8,"#3a4452"]]){
-    pg.strokeStyle=col;pg.lineWidth=step==8?1.2:1;pg.beginPath();
-    for(let x=Math.floor(x0/step)*step;x<=x1;x+=step){const [a]=w2s(x,0);pg.moveTo(a,0);pg.lineTo(a,pc.height)}
-    for(let y=Math.floor(y0/step)*step;y<=y1;y+=step){const [,b]=w2s(0,y);pg.moveTo(0,b);pg.lineTo(pc.width,b)}
-    pg.stroke();
-  }
-  const P=hover&&!closed?[...pts,hover]:pts; if(!P.length)return;
-  pg.beginPath();P.forEach((p,i)=>{const [a,b]=w2s(...p);i?pg.lineTo(a,b):pg.moveTo(a,b)});
-  if(closed)pg.closePath();pg.fillStyle="rgba(78,161,255,.18)";if(closed)pg.fill();
-  pg.strokeStyle="#4ea1ff";pg.lineWidth=2;pg.stroke();
-  pts.forEach((p,i)=>{const [a,b]=w2s(...p);pg.fillStyle=i==0&&!closed?"#ffd24e":"#fff";pg.beginPath();pg.arc(a,b,4,0,7);pg.fill()});
-  if(hover&&pts.length&&!closed){const q=pts[pts.length-1];const d=Math.hypot(hover[0]-q[0],hover[1]-q[1]);const [a,b]=w2s((hover[0]+q[0])/2,(hover[1]+q[1])/2);pg.fillStyle="#fff";pg.fillText(d.toFixed(1)+" m",a+6,b-6)}
-}
-pc.addEventListener("pointermove",e=>{const r=pc.getBoundingClientRect();const w=s2w(e.clientX-r.left,e.clientY-r.top);hover=[snapv(w[0]),snapv(w[1])];drawPlan()});
-pc.addEventListener("click",e=>{
-  if(closed||!hover)return;
-  if(pts.length>=3&&hover[0]==pts[0][0]&&hover[1]==pts[0][1]){closed=true;changed();return}
-  if(pts.length&&hover[0]==pts[pts.length-1][0]&&hover[1]==pts[pts.length-1][1])return;
-  pts.push(hover);changed();
-});
-pc.addEventListener("wheel",e=>{e.preventDefault();view.s=Math.min(60,Math.max(3,view.s*(e.deltaY<0?1.1:.9)));drawPlan()},{passive:false});
-const shapes={bBox:[[0,0],[20,0],[20,12],[0,12]],bL:[[0,0],[24,0],[24,10],[10,10],[10,18],[0,18]],bU:[[0,0],[28,0],[28,16],[20,16],[20,8],[8,8],[8,16],[0,16]]};
-for(const k in shapes)$(k).onclick=()=>{pts=shapes[k].map(p=>[p[0]-10,p[1]-8]);closed=true;changed()};
-$("bClear").onclick=()=>{pts=[];closed=false;real=null;changed()};
-// ---------- 3D ----------
-const rc=$("v3"), R=new T.WebGLRenderer({canvas:rc,antialias:true}); R.setPixelRatio(1);
-const sc=new T.Scene(); sc.background=new T.Color(0x20242a);
-const cam=new T.PerspectiveCamera(45,1,.1,2000); let az=.8,el=.6,dist=60,tgt=new T.Vector3(0,0,6);
-sc.add(new T.HemisphereLight(0xffffff,0x445566,1.1)); const sun=new T.DirectionalLight(0xffffff,1.6);sun.position.set(30,-20,50);sc.add(sun);
-const gr=new T.GridHelper(160,20,0x4a5566,0x2c323b);gr.rotation.x=Math.PI/2;sc.add(gr);
-const grp=new T.Group();sc.add(grp);
-const PAL={facade:0xd9d2c3,glass:0x4b7aa8,trim:0xcfc4ad,roof:0x4a3a32,door:0x3a2a1a,gls:0x4b7aa8,facb:0x8a3a28,facc:0x333338,facd:0xa0602a,gar:0x8c8c85,rail:0xcfc4ad};
-function setCam(){cam.up.set(0,0,1);cam.position.set(tgt.x+dist*Math.cos(el)*Math.cos(az),tgt.y+dist*Math.cos(el)*Math.sin(az),tgt.z+dist*Math.sin(el));cam.lookAt(tgt)}
-let drag=null;rc.addEventListener("pointerdown",e=>{drag={x:e.clientX,y:e.clientY,b:e.button};rc.setPointerCapture(e.pointerId)});
-rc.addEventListener("pointerup",()=>drag=null);rc.addEventListener("contextmenu",e=>e.preventDefault());
-rc.addEventListener("pointermove",e=>{if(!drag)return;const dx=e.clientX-drag.x,dy=e.clientY-drag.y;drag.x=e.clientX;drag.y=e.clientY;
-  if(drag.b==2){const k=dist*.002;tgt.x-=(-Math.sin(az)*dx+Math.cos(az)*Math.sin(el)*dy)*k*-1;tgt.y-=(Math.cos(az)*dx+Math.sin(az)*Math.sin(el)*dy)*k*-1}
-  else{az-=dx*.01;el=Math.min(1.5,Math.max(.05,el+dy*.01))}});
-rc.addEventListener("wheel",e=>{e.preventDefault();dist=Math.min(500,Math.max(5,dist*(e.deltaY<0?.9:1.1)))},{passive:false});
-function clear(){while(grp.children.length){const o=grp.children.pop();o.geometry?.dispose()}}
-function proxy(){ // vista previa instantánea: prisma extruido
-  clear();if(!closed||pts.length<3)return;
-  const sh=new T.Shape(pts.map(p=>new T.Vector2(p[0],p[1])));
-  const h=+$("floors").value*+$("fh").value;
-  const g=new T.ExtrudeGeometry(sh,{depth:h,bevelEnabled:false});
-  const m=new T.Mesh(g,new T.MeshStandardMaterial({color:0xb9c4d4,transparent:true,opacity:.75}));grp.add(m);
-}
-function showReal(){
-  clear();const g=new T.BufferGeometry();
-  g.setAttribute("position",new T.Float32BufferAttribute(real.v,3));g.setIndex(real.f);
-  const names=real.mats, n=real.m.length; // grupos por material
-  const order=[...real.m.keys()].sort((a,b)=>real.m[a]-real.m[b]); const idx=[];order.forEach(t=>idx.push(real.f[t*3],real.f[t*3+1],real.f[t*3+2]));g.setIndex(idx);
-  let st=0;const mats=[];const used=[...new Set(real.m)].sort((a,b)=>a-b);
-  for(const mi of used){const c=order.filter(t=>real.m[t]==mi).length;g.addGroup(st*3,c*3,mats.length);st+=c;const nm=names[mi]||"facade";mats.push(new T.MeshStandardMaterial({color:PAL[nm]??0xcccccc,side:T.DoubleSide,roughness:nm.startsWith("gl")?.2:.85}))}
-  g.computeVertexNormals();grp.add(new T.Mesh(g,mats));
-}
-function loop(){const r=rc.getBoundingClientRect();if(rc.width!==r.width|0||rc.height!==r.height|0){R.setSize(r.width|0,r.height|0,false);cam.aspect=r.width/r.height;cam.updateProjectionMatrix()}
-  setCam();R.render(sc,cam);requestAnimationFrame(loop)}
-// ---------- motor ----------
-function changed(){real=null;$("bBuild").disabled=!closed;$("help").textContent=closed?"Planta cerrada. Cambiá pisos/alto y creá la malla real.":"Dibujá la planta: clic para poner esquinas, clic en la primera (amarilla) para cerrar.";
-  if(closed){const xs=pts.map(p=>p[0]),ys=pts.map(p=>p[1]);tgt.set((Math.min(...xs)+Math.max(...xs))/2,(Math.min(...ys)+Math.max(...ys))/2,+$("floors").value*+$("fh").value/2)}
-  proxy();drawPlan()}
-$("floors").oninput=$("fh").oninput=changed;
-$("bBuild").onclick=async()=>{
-  $("bBuild").disabled=true;$("stat").textContent="Blender está armando la malla…";
-  try{const r=await fetch("/build",{method:"POST",body:JSON.stringify({pts,floors:+$("floors").value,floor_h:+$("fh").value})});
-    const j=await r.json();if(j.error)throw new Error(j.error);real=j;showReal();$("stat").textContent=`Malla real: ${j.tris} triángulos`;window.__real=j}
-  catch(e){$("stat").textContent="Error: "+e.message}
-  $("bBuild").disabled=!closed};
-window.__ed={get pts(){return pts},get closed(){return closed}};
-addEventListener("resize",drawPlan);setTimeout(()=>{drawPlan()},50);requestAnimationFrame(loop);
-</script></body></html>
+<script type="module" src="editor.js"></script>
+</body></html>

@@ -87,6 +87,12 @@ para Cities: Skylines 2 (y CS1) con LODs, UV, texturas y exportación FBX. Blend
 - Los paneles viejos de «Fachada» (`CS2_PT_alcance`, `_win`, `_door`, `_rev`, `_bal`...) ya no se registran desde que existen los cuadros de
   componentes (`CS2_PT_comp`): no agregar interfaz nueva ahí. Lo de la grilla y «Elegir paredes por material» va en `CS2_PT_ranuras`/`CS2_PT_comp`.
 
+## Editor web (carpeta `editor/`)
+- Editor estilo Sims (planta, paredes curvas, aberturas con fantasma, catálogo con miniaturas, exportar) con Blender como motor: ver
+  `editor/README.md`. `engine.py` arma la forma sin cortar por pisos (así las curvas se unen en cadenas), escribe atributos de cara por pared y
+  `cs2_slots`, y devuelve malla + reparto de aberturas (`slot_layout`/`slot_effective`) por pared. Probar con `editor/tests/e2e.js`.
+- `create_shape_object(..., pts=)` acepta una planta propia (lo usa el motor).
+
 ## Herramientas de revisión (headless)
 - `tools/hojas_componentes.py <carpeta> <window|door|balcony>`: hojas de contacto con todos los estilos incluidos.
 - `tools/render_edificio.py <salida.png> [giro] [giro_pared_frontal]`: edificio con ladrillo y vista rápida para ver el giro.
