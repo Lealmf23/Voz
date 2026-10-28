@@ -34,7 +34,7 @@ const H = () => S.floors * S.floor_h;
 function area(v) { let a = 0; for (let i = 0; i < v.length; i++) { const j = (i + 1) % v.length; a += v[i][0] * v[j][1] - v[j][0] * v[i][1]; } return a / 2; }
 function ensureCCW() { if (S.verts.length >= 3 && area(S.verts) < 0) { S.verts.reverse(); const e = S.edges.reverse(); S.edges = e.slice(1).concat(e.slice(0, 1)); S.edges.forEach(x => x.bulge = -x.bulge); (S.setbacks || []).forEach(sb => { const r = sb.ins.slice().reverse(); sb.ins = r.slice(1).concat(r.slice(0, 1)); }); } }
 function facetsOf(i, sec = 0) { const w = Wk(i, sec); if (w && w.facets) return w.facets; const n = S.verts.length; return [[S.verts[i], S.verts[(i + 1) % n]]]; }
-function wallPath(i, sec = 0) { let c = 0; return facetsOf(i, sec).map(f => { const dx = f[1][0] - f[0][0], dy = f[1][1] - f[0][1], L = Math.hypot(dx, dy) || 1e-9; const o = { p: f[0], dx: dx / L, dy: dy / L, L, c0: c }; c += L; return o; }); }
+function wallPath(i, sec = 0) { const w0 = Wk(i, sec); let c = w0 ? (w0.amin || 0) : 0; return facetsOf(i, sec).map(f => { const dx = f[1][0] - f[0][0], dy = f[1][1] - f[0][1], L = Math.hypot(dx, dy) || 1e-9; const o = { p: f[0], dx: dx / L, dy: dy / L, L, c0: c }; c += L; return o; }); }
 function atS(i, s, path = wallPath(i), sec = 0) { let f = path.find(q => s <= q.c0 + q.L + 1e-9) || path[path.length - 1]; const t = Math.max(0, Math.min(f.L, s - f.c0)); return { x: f.p[0] + f.dx * t, y: f.p[1] + f.dy * t, nx: f.dy, ny: -f.dx, f }; }
 function wallLen(i) { return wallPath(i).reduce((a, f) => a + f.L, 0); }
 const E = () => S.edges;
