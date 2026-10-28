@@ -118,7 +118,7 @@ para Cities: Skylines 2 (y CS1) con LODs, UV, texturas y exportación FBX. Blend
 - `comp.py` es una copia vieja del bloque de componentes que ya vive dentro de `cs2_edificio_addon.py`: no se importa en ningún lado.
 
 ## Estado y pendientes
-- 52/52 pruebas OK en v2.83 con bpy 5.2.1 (Python 3.13, la versión de Leo; ya no hace falta probar en 4.5). `perf_big` con `CS2_PERF_SCALE`.
+- 53/53 pruebas OK en v2.85 con bpy 5.2.1 (Python 3.13, la versión de Leo; ya no hace falta probar en 4.5). `perf_big` con `CS2_PERF_SCALE`.
 - Tipos de fachada (v2.82): `FACADE_TYPES`/`FACADE_BASE` + `cs2.facade_type`, botones en `CS2_PT_comp` (Personalizar). Prueba `facade_types`.
 - `tools/ui_dump.py`: vuelca como texto lo que muestra cada pestaña (auditoría de la interfaz sin abrir Blender).
 - Cierre de Blender 5.2.1 reportado por Leo (2026-10-28): dentro del deshacer (`ED_undo_operator_repeat` → `memfile_undo_decode`)
