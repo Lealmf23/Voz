@@ -1,0 +1,32 @@
+{
+ "BOX-FLAT-20x14x3": [
+  "3580v-1952f-d9371cb29d28"
+ ],
+ "L-FLAT-30x20x6": [
+  "10824v-5817f-433a8dd74fee"
+ ],
+ "U-GABLE_TILE-30x24x6": [
+  "17116v-9425f-ee2d77d22b6b"
+ ],
+ "T-FLAT-30x24x6": [
+  "11218v-6076f-593b4e8c8d2e"
+ ],
+ "L-GABLE_CHIM-26x18x4": [
+  "7728v-4304f-e5ead073db2b"
+ ],
+ "T-HIP_CHIM-28x22x4": [
+  "9993v-5396f-dbd94f3ab5a1"
+ ],
+ "U-BUTTERFLY-28x22x4": [
+  "8550v-4658f-9a62cf4fa96b"
+ ],
+ "L-SHED_MODERN-26x18x4": [
+  "6027v-3267f-a059b7fc4776"
+ ],
+ "BOX-MANSARD-20x14x4": [
+  "5864v-3042f-63b6673eac87"
+ ],
+ "L-GABLE_DORMER-26x18x4": [
+  "9016v-4954f-a87fe1703cb2"
+ ]
+}

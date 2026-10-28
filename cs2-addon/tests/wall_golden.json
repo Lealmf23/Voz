@@ -1,0 +1,23 @@
+{
+ "lod0-t0-q1.0-cs1False": "1908v-517f-d42d2b5b17ce",
+ "lod1-t0-q1.0-cs1False": "412v-152f-3927a8ef2361",
+ "lod1-t0-q2.5-cs1False": "412v-152f-3927a8ef2361",
+ "lod1-t0-q5.5-cs1False": "412v-152f-3927a8ef2361",
+ "lod1-t2-q1.0-cs1False": "496v-124f-5350a00f0dd3",
+ "lod1-t2-q2.5-cs1False": "496v-124f-5350a00f0dd3",
+ "lod1-t2-q5.5-cs1False": "496v-124f-5350a00f0dd3",
+ "lod1-t4-q1.0-cs1False": "48v-12f-a526197a9db2",
+ "lod1-t4-q2.5-cs1False": "48v-12f-a526197a9db2",
+ "lod1-t4-q5.5-cs1False": "48v-12f-a526197a9db2",
+ "lod1-t5-q1.0-cs1False": "428v-145f-a81f2bf4013c",
+ "lod1-t5-q2.5-cs1False": "428v-145f-a81f2bf4013c",
+ "lod1-t5-q5.5-cs1False": "428v-145f-a81f2bf4013c",
+ "lod1-t6-q1.0-cs1False": "352v-88f-2bcb8f0b3227",
+ "lod1-t6-q2.5-cs1False": "528v-168f-7bd531215ce6",
+ "lod1-t6-q5.5-cs1False": "568v-178f-194d96315425",
+ "lod2-t0-q1.0-cs1False": "88v-22f-2cb4490916ce",
+ "lod2-t0-q3.0-cs1False": "88v-22f-2cb4490916ce",
+ "lod1-t0-q1.0-cs1True": "876v-268f-35b65a3155a4",
+ "lod1-t5-q5.5-cs1True": "1908v-517f-d42d2b5b17ce",
+ "lod0-t0-q1.0-cs1True": "1908v-517f-d42d2b5b17ce"
+}

@@ -1,0 +1,40 @@
+# Pruebas del addon CS2
+
+Se ejecutan con el módulo `bpy` (sin abrir Blender):
+
+    pip install bpy numpy pillow
+    python3 tests/run_tests.py                  # todo (unos 4-5 minutos)
+    python3 tests/run_tests.py uv_bake ao_bake  # solo algunos casos
+    python3 tests/run_tests.py --update-baselines   # guarda las métricas actuales como línea base
+
+| Caso | Qué comprueba |
+|---|---|
+| lod_limits | Formas (caja, L, T, U) × pisos: LOD2 ≤ 500 triángulos, LOD1 < 50 % del LOD0, mallas válidas |
+| uv_bake | UV únicas dentro de 0-1, compartición, aprovechamiento, nitidez (px/m) contra la línea base |
+| uv_overlap | Las islas distintas no se pisan en el mapa (incluido el relleno del hueco de la azotea en L) |
+| uv_align | Las caras que comparten isla caen en la misma hilada y en la misma junta vertical del ladrillo |
+| wall_cuts | Las aberturas se cortan con el mínimo de caras: tiras laterales de alto completo y sin grilla |
+| ao_bake | Sombras sin NaN, sin bloques negros, media razonable |
+| assign_textures | Pasos 1-3 y quitar texturas |
+| export_cs2 | FBX de los 3 LOD y texturas exportadas |
+| manual_mesh | "Generar desde mi malla": LOD1 y LOD2 dentro de los límites |
+| cs1 | Generación y exportación de CS1 |
+| report_log | Registro de errores e informe |
+| perf_big | Edificio de 40 m: tiempo de Regenerar UV y nitidez |
+
+`baselines.json` guarda las métricas de referencia (px/m, islas, segundos). Una prueba falla si la métrica empeora más del 10 %
+(25 % las islas, 50 % el tiempo). Si mejoras algo a propósito, actualiza la línea base.
+
+| geom_golden | Geometría del LOD0 de 10 edificios (formas y techos) igual a golden.json |
+| balcony_golden | Los 52 estilos de balcón en LOD0/LOD1 igual a balcony_golden.json |
+| wall_golden | build_wall en LOD0/1/2 (niveles y modo CS1) igual a wall_golden.json |
+| uv_golden | Métricas de UV de varios edificios dentro de tolerancia (golden_uv.json) |
+| ui_draw | Todos los paneles de la barra lateral se dibujan sin errores (con y sin edificio, con y sin «Avanzado») |
+| facade_holes | Con la limpieza activa la fachada no queda con huecos (cornisas, persianas, molduras) |
+| icons | Todos los íconos del add-on existen en la versión de Blender |
+| mip_bleed | Con mipmaps (textura achicada) un material no toma el color de su vecino, en el atlas ni en el horneado |
+| quick_view | La vista rápida muestra la textura elegida sin UV ni horneado, se apaga y se actualiza con el botón |
+| uv_zones | Prioridad de espacio por zona y zonas fijadas: lo fijado no se mueve al regenerar y no se pisa con otras islas |
+| retexture | «Rehacer texturas» deja UV, sombras y texturas asignadas, y se puede repetir |
+| tex_missing | Avisa de archivos de textura faltantes (panel, lista de control y mensajes) |
+| ground_mat | Material distinto en la planta baja (1 o 2 pisos, en los tres LODs) |
