@@ -9,7 +9,7 @@ Después: Vista 3D > tecla N > pestaña "CS2".
 bl_info = {
     "name": "CS2 Generador de Edificios",
     "author": "Leo",
-    "version": (2, 80, 0),
+    "version": (2, 81, 0),
     "blender": (4, 2, 0),
     "location": "Vista 3D > Barra lateral (N) > CS2",
     "description": "Edificios low-poly de todo tipo (residencial, comercial, oficinas, industrial, servicios y emblemáticos) con LODs y FBX para Cities: Skylines 2",
@@ -1728,10 +1728,16 @@ def style_by_id(sid):
     return _LIB["styles"].get(name) if name else None
 
 
-def style_for(p, mat, cfg=None):
-    """Estilo que le toca a una abertura: el de su pared, o el general; None si no hay (la vidriera comercial, de vidrio liso, no lleva)."""
+def style_for(p, mat, cfg=None, op=None):
+    """Estilo que le toca a una abertura: el de su ranura (si se lo cambiaron a mano), el de su pared o el general; None si no hay
+    (la vidriera comercial, de vidrio liso, no lleva)."""
     if mat == MAT["gls"]:
         return None
+    ss = p.get("_ss")
+    if ss and op is not None:
+        k_ = (round(op[0], 2), round(op[2], 2))
+        if k_ in ss:
+            return ss[k_] or None          # False = «sin estilo»
     is_door = mat == MAT["door"]
     if cfg:
         sid = int(cfg.get("d_style" if is_door else "w_style", 0) or 0)
@@ -1894,7 +1900,7 @@ def facade_faces(bm, origin, n, length, H, ops, depth, p, fid):
             if depth <= 0:  # LOD1: la abertura queda al ras
                 F([V(i, j), V(i + 1, j), V(i + 1, j + 1), V(i, j + 1)], m)
                 continue
-            if pieces_for(p, m) or style_for(p, m):  # con pieza o estilo propio, el fondo del hueco es pared
+            if pieces_for(p, m) or style_for(p, m, None, ops[k]):  # con pieza o estilo propio, el fondo del hueco es pared
                 m = MAT["facade"]
             F([V(i, j, True), V(i + 1, j, True), V(i + 1, j + 1, True), V(i, j + 1, True)], m)
             if cell_op.get((i, j - 1)) != k:  # alféizar
@@ -1908,7 +1914,7 @@ def facade_faces(bm, origin, n, length, H, ops, depth, p, fid):
 
     if depth > 0:  # estilos o piezas propias (solo LOD0)
         for k, op in enumerate(ops):
-            st = style_for(p, op[4])
+            st = style_for(p, op[4], None, op)
             if st:
                 insert_style(bm, st, o, u, n, op, depth, p)
                 continue
@@ -2515,6 +2521,68 @@ def group_curved_walls(walls, curve_deg):
     return walls
 
 
+def _slot_key_of(pts, n, center):
+    """Clave geométrica de una pared (coordenadas del mundo): [x, y del inicio, x, y del final, z abajo, z arriba]."""
+    u = Vector((0, 0, 1)).cross(n)
+    a = [q.dot(u) for q in pts]
+    i0, i1 = min(range(len(pts)), key=lambda i: a[i]), max(range(len(pts)), key=lambda i: a[i])
+    S, E = pts[i0] + center, pts[i1] + center
+    return [round(S.x, 3), round(S.y, 3), round(E.x, 3), round(E.y, 3),
+            round(min(q.z for q in pts) + center.z, 3), round(max(q.z for q in pts) + center.z, 3)]
+
+
+def slot_edits_load(obj):
+    """Ediciones de ranuras guardadas en el objeto forma: {"walls": [{"key": [...], "ov": {...}, "add": [...]}]}."""
+    raw = obj.get("cs2_slots") if obj is not None else None
+    if not raw:
+        return {"walls": []}
+    try:
+        d = json.loads(raw)
+        return d if isinstance(d, dict) and isinstance(d.get("walls"), list) else {"walls": []}
+    except (TypeError, ValueError):
+        _log_exc("ranuras_guardadas")
+        return {"walls": []}
+
+
+def slot_edits_match(data, key, tol=0.3):
+    """La entrada de `data` para una pared de clave `key` (la más cercana dentro de la tolerancia) o None."""
+    best = None
+    for w in data.get("walls", []):
+        k2 = w.get("key")
+        if not k2 or len(k2) != 6:
+            continue
+        d = max(abs(a - b) for a, b in zip(key, k2))
+        if d <= tol and (best is None or d < best[0]):
+            best = (d, w)
+    return best[1] if best else None
+
+
+def attach_slot_edits(walls, center, obj):
+    """Pone en cada pared (o curva) las ediciones de ranuras que le corresponden (cfg["_slots"])."""
+    data = slot_edits_load(obj)
+    if not data["walls"]:
+        return walls
+    walls = list(walls)
+    chain_key = {}
+    for i, (pts, n, cfg) in enumerate(walls):
+        ch = (cfg or {}).get("_chain")
+        if ch:
+            if ch["id"] not in chain_key:
+                fs = ch["facets"]
+                chain_key[ch["id"]] = [round(fs[0]["S"][0] + center.x, 3), round(fs[0]["S"][1] + center.y, 3),
+                                       round(fs[-1]["E"][0] + center.x, 3), round(fs[-1]["E"][1] + center.y, 3),
+                                       round(ch["zmin"] + center.z, 3), round(ch["zmax"] + center.z, 3)]
+            key = chain_key[ch["id"]]
+        else:
+            key = _slot_key_of(pts, n, center)
+        ent = slot_edits_match(data, key)
+        if ent:
+            c2 = dict(cfg or {})
+            c2["_slots"] = ent
+            walls[i] = (pts, n, c2)
+    return walls
+
+
 def read_shape(obj, recalc=True, fh=None, curve_deg=0.0):
     """Lee la malla base en coordenadas del mundo, centrada en XY y apoyada en z=0.
 
@@ -2592,7 +2660,7 @@ def read_shape(obj, recalc=True, fh=None, curve_deg=0.0):
                                       roof_face_cfg(roof, lays) if lays else None))
     size = Vector((max(xs) - min(xs), max(ys) - min(ys), max(zs) - min(zs)))
     bm.free()
-    walls = group_curved_walls(walls, curve_deg)
+    walls = attach_slot_edits(group_curved_walls(walls, curve_deg), center, obj)
     return {"walls": walls, "roofs": roofs, "parapet_edges": parapet_edges, "center": center, "size": size}
 
 
@@ -2642,9 +2710,134 @@ def _hq(*key):
     return (zlib.crc32(repr(key).encode()) % 10007) / 10007.0
 
 
+SLOT_KINDS = [("win", "Ventana", ""), ("door", "Puerta", ""), ("bal", "Balcón", ""), ("shop", "Vidriera", ""), ("none", "Vacío", "")]
+
+
+def _slot_kind_of(op, bals):
+    """Tipo de una abertura ya armada: door, shop (vidriera), bal (puerta vidriada con balcón) o win."""
+    if op[4] in (MAT["door"], MAT["gar"]):
+        return "door"
+    if op[4] == MAT["gls"]:
+        return "shop"
+    c = (op[0] + op[1]) / 2
+    return "bal" if any(abs(b[0] - c) < 0.01 and abs(b[1] - op[2]) < 0.02 for b in bals) else "win"
+
+
+def _slot_defaults(kind, G):
+    """(ancho, alto, antepecho) de un tipo de ranura cuando no hay medidas propias."""
+    fh = G["fh"]
+    if kind == "door":
+        return G["dw"], G["dh"], 0.0
+    if kind == "bal":
+        return G["ww"], 2.1, 0.0
+    if kind == "shop":
+        return 2.0, max(1.0, fh - 0.95), 0.3
+    return G["ww"], G["wh"], G["sill"]
+
+
+def _slot_build(p, G, e, tag, op, kind0, bal0):
+    """Una ranura con sus ajustes propios: (abertura, profundidad, balcón o None, estilo o None) o None si queda vacía o no entra.
+    e = ajustes de la ranura (kind, w, h, sill, da, style, a, f)."""
+    kind = e.get("kind") or kind0 or "win"
+    if kind == "none" or e.get("del"):
+        return None
+    f = tag[0] if (tag and isinstance(tag[0], int)) else int(e.get("f", 1))
+    zb = G["zmin"] + f * G["fh"]
+    if op is not None:
+        c, w0, h0, s0 = (op[0] + op[1]) / 2, op[1] - op[0], op[3] - op[2], op[2] - zb
+        if kind != kind0:
+            w0, h0, s0 = _slot_defaults(kind, G)
+    else:
+        c = float(e.get("a", (G["amin"] + G["amax"]) / 2))
+        w0, h0, s0 = _slot_defaults(kind, G)
+    c += float(e.get("da", 0.0))
+    w, h = float(e.get("w", w0)), float(e.get("h", h0))
+    sill = float(e.get("sill", s0)) if kind in ("win", "shop") else 0.0
+    a0, a1 = max(c - w / 2, G["amin"] + 0.12), min(c + w / 2, G["amax"] - 0.12)
+    z0 = zb + sill
+    z1 = min(z0 + h, G["zmax"] - 0.15)
+    if a1 - a0 < 0.4 or z1 - z0 < 0.3 or z0 < G["zmin"] - 0.01 or not rect_fits(G["poly"], a0, a1, z0, z1):
+        return None
+    mat = {"win": MAT["glass"], "bal": MAT["glass"], "door": MAT["door"], "shop": MAT["gls"]}[kind]
+    dep = G["ddepth"] if kind == "door" else (0.15 if kind == "shop" else G["wdepth"])
+    st, bal = None, None
+    name = e.get("style")
+    if name:
+        st = False if name == "__NONE__" else get_style(name)
+    if kind == "bal":
+        bst = G["bstyle"] if not (G["bstyle"] and G["bstyle"].get("bal_type") == "LOGGIA") else None
+        if name and name != "__NONE__" and st:
+            bst = st
+        bal = ((a0 + a1) / 2, zb, G["bd"], G["bw"], G["rail"], bst, G["ww"])
+        st = None
+    return (a0, a1, z0, z1, mat), dep, bal, st
+
+
+def apply_slot_edits(p, E, ops, depths, tags, bals, G):
+    """Aplica a las aberturas automáticas de una pared lo que el usuario editó a mano (borrar, cambiar tipo, medidas, estilo,
+    correr) y suma las ranuras agregadas. Devuelve (aberturas, profundidades, balcones, estilos por abertura)."""
+    ov, adds = E.get("ov") or {}, E.get("add") or []
+    kept, claimed, ss = [], set(), {}
+    rects = []
+    for op, dep, tag in zip(ops, depths, tags):
+        kind0 = _slot_kind_of(op, bals)
+        c = (op[0] + op[1]) / 2
+        bal0 = next((b for b in bals if abs(b[0] - c) < 0.01 and abs(b[1] - op[2]) < 0.02), None) if kind0 == "bal" else None
+        if bal0 is not None:
+            claimed.add(id(bal0))
+        e = ov.get(f"{tag[0]},{tag[1]}") if tag else None
+        res = (op, dep, bal0, None) if not e else _slot_build(p, G, e, tag, op, kind0, bal0)
+        if res is None and e:
+            continue
+        kept.append((res, e is not None, (op, dep, bal0, None)))
+    out, out_bals = [], []
+
+    def conflict(r):
+        return any(min(r[1], q[1]) - max(r[0], q[0]) > 0.05 and min(r[3], q[3]) - max(r[2], q[2]) > 0.05 for q, _d in out)
+    for res, edited, orig in kept:
+        if edited and conflict(res[0]):
+            res = orig
+        out.append((res[0], res[1]))
+        if res[2] is not None:
+            out_bals.append(res[2])
+        if res[3] is not None:
+            ss[(round(res[0][0], 2), round(res[0][2], 2))] = res[3]
+    for i, e in enumerate(adds):
+        res = _slot_build(p, G, e, ("add", i), None, None, None)
+        if res is None or conflict(res[0]):
+            continue
+        out.append((res[0], res[1]))
+        if res[2] is not None:
+            out_bals.append(res[2])
+        if res[3] is not None:
+            ss[(round(res[0][0], 2), round(res[0][2], 2))] = res[3]
+    out_bals += [b for b in bals if id(b) not in claimed]
+    return [o_[0] for o_ in out], [o_[1] for o_ in out], out_bals, ss
+
+
 def _chain_keep_bal(p, cfg, n):
     """¿Una faceta de una curva lleva balcones? Si mira al frente, si se pidieron en todas las paredes o si esta los pide siempre."""
     return n.y < -0.7 or p.get("balcony_walls") == "all" or int(cfg.get("bal_mode", 0)) in (2, 3)
+
+
+def _chain_virtual(p, cfg, ch, lod):
+    """Aberturas de toda una curva en la pared desenrollada: (aberturas, balcones, profundidades, estilos por abertura). Si `cfg` lleva
+    «_slots» se aplican; la interfaz de ranuras la llama sin ellas para ver el reparto automático. Deja p["_slot_last"] del arco entero."""
+    base = {k: v for k, v in cfg.items() if k != "_chain"}
+    vp = [(0.0, ch["zmin"]), (ch["L"], ch["zmin"]), (ch["L"], ch["zmax"]), (0.0, ch["zmax"])]
+    p2 = p
+    gsh = (p.get("groups") or {}).get("sh")
+    if gsh or base.get("flags", 0) & FLAG_SHOP:      # vidriera sobre una curva: un tramo por faceta (los pilares caen en las uniones)
+        avg = ch["L"] / max(1, ch["count"])
+        p2 = dict(p, groups=dict(p.get("groups") or {}))
+        if gsh:
+            p2["groups"]["sh"] = dict(gsh, bay=min(gsh["bay"], avg))
+        if base.get("flags", 0) & FLAG_SHOP:
+            base["sh_bay"] = min(float(base.get("sh_bay", 3.2)), avg)
+    res_ = shape_openings(p2, vp, Vector((0.0, -1.0, 0.0)), ch["wid"], lod, base)
+    if p2 is not p:
+        p["_slot_last"] = p2.get("_slot_last")
+    return (*res_, dict(p2.get("_ss") or {}))
 
 
 def _chain_openings(p, poly, n, lod, cfg, ch):
@@ -2655,19 +2848,9 @@ def _chain_openings(p, poly, n, lod, cfg, ch):
     cache = p.setdefault("_chain_cache", {})
     key = (ch["id"], lod)
     if key not in cache:
-        base = {k: v for k, v in cfg.items() if k != "_chain"}
-        vp = [(0.0, ch["zmin"]), (ch["L"], ch["zmin"]), (ch["L"], ch["zmax"]), (0.0, ch["zmax"])]
-        p2 = p
-        gsh = (p.get("groups") or {}).get("sh")
-        if gsh or base.get("flags", 0) & FLAG_SHOP:      # vidriera sobre una curva: un tramo por faceta (los pilares caen en las uniones)
-            avg = ch["L"] / max(1, ch["count"])
-            p2 = dict(p, groups=dict(p.get("groups") or {}))
-            if gsh:
-                p2["groups"]["sh"] = dict(gsh, bay=min(gsh["bay"], avg))
-            if base.get("flags", 0) & FLAG_SHOP:
-                base["sh_bay"] = min(float(base.get("sh_bay", 3.2)), avg)
-        cache[key] = shape_openings(p2, vp, Vector((0.0, -1.0, 0.0)), ch["wid"], lod, base)
-    ops, bals, depths = cache[key]
+        cache[key] = _chain_virtual(p, cfg, ch, lod)
+    ops, bals, depths, ss_all = cache[key]
+    ss_f = {}
     base_cfg = {k: v for k, v in cfg.items() if k != "_chain"}
     front = n.y < -0.7
     keep_bal = _chain_keep_bal(p, cfg, n)
@@ -2708,6 +2891,8 @@ def _chain_openings(p, poly, n, lod, cfg, ch):
         o_ops.append(new)
         o_depths.append(dep)
         shifts.append((c, loc + w / 2))
+        if (round(op[0], 2), round(op[2], 2)) in ss_all and new[4] == op[4]:
+            ss_f[(round(new[0], 2), round(new[2], 2))] = ss_all[(round(op[0], 2), round(op[2], 2))]
     o_bals = []
     for b in bals:
         if round(b[0], 3) in as_window or not keep_bal:
@@ -2718,6 +2903,7 @@ def _chain_openings(p, poly, n, lod, cfg, ch):
         if m is None or ln - 0.3 < 0.8:
             continue
         o_bals.append((m, b[1], b[2], b[3] if b[3] is None else min(b[3], ln - 0.3)) + tuple(b[4:]))   # ancho None: lo decide el estilo
+    p["_ss"] = ss_f
     return o_ops, o_bals, o_depths
 
 
@@ -2785,6 +2971,7 @@ def shape_openings(p, poly, n, wid, lod, cfg=None):
         return bal_ok and has_balcony(p, floor0 + f, k, wid + 1)
 
     ops, bals, depths = [], [], []
+    tags = []        # (piso, columna) de cada abertura automática; la puerta es (0, -1)
     door = None
     dmode = int(cfg.get("door_mode", 0))
     if dmode == 1 or (dmode == 0 and front and ground):
@@ -2812,6 +2999,7 @@ def shape_openings(p, poly, n, wid, lod, cfg=None):
             door = rect
             ops.append(rect)
             depths.append(ddepth)
+            tags.append((0, -1))
     if door and (fl & FLAG_WIN) and int(cfg.get("w_count", 0)) > 0:
         cols = _cols_around_door(amin, amax, door[0], door[1], int(cfg["w_count"]), ww) 
         cols = [c + off for c in cols]
@@ -2851,6 +3039,7 @@ def shape_openings(p, poly, n, wid, lod, cfg=None):
             if not rect_fits(poly, rect[0], rect[1], rect[2], rect[3]):
                 continue
             ops.append(rect)
+            tags.append((f, k))
             depths.append(loggia_dep if (is_bal and loggia) else wdepth)
             if is_bal and loggia:
                 bals.append(((rect[0] + rect[1]) / 2, base, loggia_dep, rect[1] - rect[0], rail, bstyle, ww))
@@ -2858,7 +3047,18 @@ def shape_openings(p, poly, n, wid, lod, cfg=None):
                 bals.append(((rect[0] + rect[1]) / 2, base, bd, bw, rail, bstyle, ww))
     sh = group_on(p, cfg, "sh", n, zmin)
     if sh and ground and length >= 2.0:
+        tag_of = {id(op_): tg for op_, tg in zip(ops, tags)}
         ops, depths = _shop_ops(p, sh, ops, depths, amin, amax, zmin, fh)
+        tags = [tag_of.get(id(op_)) for op_ in ops]
+    p["_slot_last"] = dict(ops=list(ops), tags=list(tags), bals=list(bals), zmin=zmin, zmax=zmax, amin=amin, amax=amax, fh=fh,
+                           ww=ww, wh=wh, sill=sill, dw=min(max(ww, 1.2), 1.5), dh=min(2.2, fh - 0.4))
+    p["_ss"] = {}
+    E = cfg.get("_slots")
+    if E:
+        G = dict(poly=poly, amin=amin, amax=amax, zmin=zmin, zmax=zmax, fh=fh, ww=ww, wh=wh, sill=sill, wdepth=wdepth,
+                 ddepth=locals().get("ddepth", wdepth), dw=min(max(ww, 1.2), 1.5), dh=min(2.2, fh - 0.4),
+                 bd=bd, bw=bw, rail=rail, bstyle=bstyle)
+        ops, depths, bals, p["_ss"] = apply_slot_edits(p, E, ops, depths, tags, bals, G)
     return ops, bals, depths
 
 
@@ -3672,7 +3872,7 @@ def _wall_sink_openings(tmp, groups, ext, skip_back, n, p, cfg, ops, depths, pan
     for k, faces in groups.items():
         mat = ops[k][4]
         depth = depths[k] if cut else 0.0
-        has_style = styon(k, ops[k]) and mat != MAT["facade"] and style_for(p, mat, cfg) is not None
+        has_style = styon(k, ops[k]) and mat != MAT["facade"] and style_for(p, mat, cfg, ops[k]) is not None
         if depth > 0:
             res = bmesh.ops.extrude_face_region(tmp, geom=faces)
             newv = [g for g in res["geom"] if isinstance(g, bmesh.types.BMVert)]
@@ -3687,7 +3887,7 @@ def _wall_sink_openings(tmp, groups, ext, skip_back, n, p, cfg, ops, depths, pan
             for fc in faces:
                 fc.material_index = MAT["facade"] if has_style else mat
         if depth > 0 and has_style:
-            st_ = style_for(p, mat, cfg)
+            st_ = style_for(p, mat, cfg, ops[k])
             if st_.get("kind") == "window" and st_.get("shape", "RECT") == "RECT":   # el fondo lo tapa el vidrio del estilo: no se genera
                 skip_back.add(k)
     if ext:
@@ -3698,7 +3898,7 @@ def _wall_sink_openings(tmp, groups, ext, skip_back, n, p, cfg, ops, depths, pan
                 drop.append(g)
                 continue
             if g.normal.dot(n) > 0.9:
-                g.material_index = (MAT["facade"] if (styon(k, ops[k]) and (pieces_for(p, ops[k][4]) or style_for(p, ops[k][4], cfg)))
+                g.material_index = (MAT["facade"] if (styon(k, ops[k]) and (pieces_for(p, ops[k][4]) or style_for(p, ops[k][4], cfg, ops[k])))
                                     else ops[k][4])
             else:
                 g.material_index = pans[k][0] if k in pans else MAT["facade"]
@@ -4305,7 +4505,7 @@ def build_wall(bm, pts, n, p, wid, lod, cfg=None):
     if comp and qops:
         sty, plain = [], []
         for op in qops:
-            st = style_for(p, op[4], cfg) if op[4] != MAT["facade"] else None
+            st = style_for(p, op[4], cfg, op) if op[4] != MAT["facade"] else None
             if st and op[1] - op[0] >= 0.3 and op[3] - op[2] >= 0.3:
                 sty.append((op, st))
             else:
@@ -4320,7 +4520,7 @@ def build_wall(bm, pts, n, p, wid, lod, cfg=None):
                 continue
             if not styon(k, op):
                 continue
-            st = style_for(p, op[4], cfg)
+            st = style_for(p, op[4], cfg, op)
             if st:
                 insert_style(bm, st, o, u, n, op, depths[k], p)
                 continue
@@ -16066,6 +16266,11 @@ class CS2_PT_comp(bpy.types.Panel):
             box.label(text=f"Editando: {n} cara(s) elegida(s)" if n else "Editando: caras elegidas", icon="SNAP_FACE")
             ui_note(box, "Cada cambio vale solo para esas caras." if n else "Hacé clic en una o más caras de la forma.")
             box.operator("cs2.edit_shape", text="Volver a todo el edificio", icon="HOME")
+        if editing and n:
+            row = lay.row(align=True)
+            row.label(text="Elegir paredes de material:")
+            for k_, lab_ in (("1", "A"), ("2", "B"), ("3", "C"), ("4", "D")):
+                row.operator("cs2.sel_wall_mat", text=lab_).mat = k_
         col = lay.column(align=True)
         col.enabled = not (editing and n == 0)
         for spec in _COMP["specs"].values():
@@ -16092,6 +16297,518 @@ def _unregister_components():
 
 
 
+# ----------------------------------------------------------------------------------------------------------------
+# Editor de fachada por ranuras: cada abertura es un elemento editable de su pared (borrar, mover, cambiar tipo, medidas y estilo,
+# agregar). Las ediciones se guardan en el objeto forma (cs2_slots) con la clave geométrica de la pared, así sobreviven al regenerar.
+# ----------------------------------------------------------------------------------------------------------------
+def _chain_slot_key(ch, center):
+    fs = ch["facets"]
+    return [round(fs[0]["S"][0] + center.x, 3), round(fs[0]["S"][1] + center.y, 3),
+            round(fs[-1]["E"][0] + center.x, 3), round(fs[-1]["E"][1] + center.y, 3),
+            round(ch["zmin"] + center.z, 3), round(ch["zmax"] + center.z, 3)]
+
+
+def slot_layout(p, shape, idx):
+    """Reparto automático de la pared (o curva entera) número `idx` de `shape`, sin las ediciones: las ranuras con su piso (f), columna
+    (k; la puerta es -1), tipo, medidas y el cuadro de la pared. Es lo que el editor dibuja y a lo que se refieren las ediciones."""
+    pts, n, cfg = shape["walls"][idx]
+    cfg = cfg or {}
+    center = shape["center"]
+    ch = cfg.get("_chain")
+    base = {k: v for k, v in cfg.items() if k != "_slots"}
+    p = dict(p)
+    p.pop("_chain_cache", None)
+    if ch:
+        key = _chain_slot_key(ch, center)
+        _chain_virtual(p, base, ch, 0)
+    else:
+        key = _slot_key_of(pts, n, center)
+        u = Vector((0, 0, 1)).cross(n).normalized()
+        poly = [((q - pts[0]).dot(u), q.z) for q in pts]
+        shape_openings(p, poly, n, idx, 0, base)
+    last = p.get("_slot_last") or {}
+    slots = []
+    for op, tg in zip(last.get("ops", []), last.get("tags", [])):
+        if tg:
+            slots.append(dict(f=tg[0], k=tg[1], kind=_slot_kind_of(op, last["bals"]), a0=op[0], a1=op[1], z0=op[2], z1=op[3]))
+    lay = dict(key=key, chain=bool(ch), slots=slots, defaults={k: last.get(k) for k in ("ww", "wh", "sill", "dw", "dh", "fh")},
+               amin=last.get("amin", 0.0), amax=last.get("amax", 0.0), zmin=last.get("zmin", 0.0), zmax=last.get("zmax", 0.0))
+    fh = last.get("fh") or 3.0
+    lay["nfl"] = max(1, int(round((lay["zmax"] - lay["zmin"]) / fh)))
+    return lay
+
+
+def slot_entry_for(data, key, create=False):
+    e = slot_edits_match(data, key)
+    if e is None and create:
+        e = {"key": list(key), "ov": {}, "add": []}
+        data["walls"].append(e)
+    return e
+
+
+def slot_edits_save(obj, data):
+    data["walls"] = [w for w in data["walls"] if w.get("ov") or w.get("add")]
+    if data["walls"]:
+        obj["cs2_slots"] = json.dumps(data)
+    elif "cs2_slots" in obj:
+        del obj["cs2_slots"]
+
+
+def slot_scope_tags(lay, tag, scope):
+    """Ranuras a las que vale una edición: esta, toda su columna, todo su piso o toda la pared. tag = (f, k) o ("add", i)."""
+    if tag[0] == "add" or scope == "SLOT":
+        return [tag]
+    sl = lay["slots"]
+    if scope == "COLUMN":
+        return [(x["f"], x["k"]) for x in sl if x["k"] == tag[1]]
+    if scope == "FLOOR":
+        return [(x["f"], x["k"]) for x in sl if x["f"] == tag[0]]
+    return [(x["f"], x["k"]) for x in sl]
+
+
+def slot_set_fields(entry, tags, fields):
+    """Escribe campos de edición en esas ranuras (un valor None quita el campo)."""
+    for tg in tags:
+        if tg[0] == "add":
+            if 0 <= tg[1] < len(entry["add"]):
+                tgt = entry["add"][tg[1]]
+            else:
+                continue
+        else:
+            tgt = entry["ov"].setdefault(f"{tg[0]},{tg[1]}", {})
+        for k, v in fields.items():
+            if v is None:
+                tgt.pop(k, None)
+            else:
+                tgt[k] = v
+    entry["ov"] = {k: v for k, v in entry["ov"].items() if v}
+
+
+def slot_effective(lay, entry, tag):
+    """Valores con los que se ve una ranura (reparto automático más ediciones): dict kind, w, h, sill, da, style, a0, a1, f, existe."""
+    d = lay["defaults"]
+    e = {}
+    slot = None
+    if tag[0] == "add":
+        e = (entry or {}).get("add", [])[tag[1]] if entry and 0 <= tag[1] < len(entry.get("add", [])) else {}
+        kind = e.get("kind", "win")
+        w0, h0, s0 = _slot_defaults(kind, dict(fh=d["fh"], ww=d["ww"], wh=d["wh"], sill=d["sill"], dw=d["dw"], dh=d["dh"]))
+        c = float(e.get("a", (lay["amin"] + lay["amax"]) / 2))
+        f = int(e.get("f", 1))
+    else:
+        slot = next((x for x in lay["slots"] if x["f"] == tag[0] and x["k"] == tag[1]), None)
+        if slot is None:
+            return None
+        e = ((entry or {}).get("ov") or {}).get(f"{tag[0]},{tag[1]}", {})
+        kind = e.get("kind") or slot["kind"]
+        w0, h0, s0 = slot["a1"] - slot["a0"], slot["z1"] - slot["z0"], slot["z0"] - (lay["zmin"] + slot["f"] * d["fh"])
+        if kind != slot["kind"] and kind != "none":
+            w0, h0, s0 = _slot_defaults(kind, dict(fh=d["fh"], ww=d["ww"], wh=d["wh"], sill=d["sill"], dw=d["dw"], dh=d["dh"]))
+        c = (slot["a0"] + slot["a1"]) / 2
+        f = slot["f"]
+    w, h = float(e.get("w", w0)), float(e.get("h", h0))
+    da = float(e.get("da", 0.0))
+    return dict(kind=kind, w=w, h=h, sill=float(e.get("sill", s0)), da=da, style=e.get("style") or "__GLOBAL__",
+                a0=c + da - w / 2, a1=c + da + w / 2, f=f, edited=bool(e))
+
+
+_SLOT_CACHE = {"t": 0.0, "sig": None, "ctx": None}
+
+
+def slot_cache_clear():
+    _SLOT_CACHE.update(t=0.0, sig=None, ctx=None)
+
+
+def _active_wall_ref(context):
+    """(objeto forma, forma leída, índice de la pared) de la cara activa en Editar forma, o None."""
+    obj = _edit_shape_obj(context)
+    if obj is None:
+        return None
+    f = bmesh.from_edit_mesh(obj.data).faces.active
+    if f is None or abs(f.normal.z) > 0.12:
+        return None
+    s = context.scene.cs2_building
+    cw = obj.matrix_world @ f.calc_center_median()
+    shape = read_shape(obj, s.shape_recalc, s.floor_height if s.snap_floors else None, s.curve_deg)
+    best = None
+    for i, (pts, n, _cfg) in enumerate(shape["walls"]):
+        c = sum((q for q in pts), Vector((0, 0, 0))) / len(pts) + shape["center"]
+        d = math.hypot(c.x - cw.x, c.y - cw.y)
+        if n.dot(Vector((f.normal.x, f.normal.y, 0.0)).normalized()) > 0.9 and (best is None or d < best[0]):
+            best = (d, i)
+    if best is None or best[0] > 0.3 + 0.5 * max(shape["size"].x, shape["size"].y) * 0:
+        return None
+    return obj, shape, best[1]
+
+
+def slot_ctx(context, fresh=False):
+    """Todo lo que usa el editor de ranuras para la cara activa: dict(obj, s, p, lay, data, entry) o None. Guarda el resultado
+    medio segundo para no recalcular en cada repintado de la interfaz."""
+    ref = _active_wall_ref(context)
+    if ref is None:
+        return None
+    obj, shape, idx = ref
+    s = context.scene.cs2_building
+    sig = (obj.name, idx, len(obj.data.vertices), obj.get("cs2_slots"), s.floor_height, s.curve_deg, s.win_w, s.win_h)
+    now = time.time()
+    if not fresh and _SLOT_CACHE["sig"] == sig and now - _SLOT_CACHE["t"] < 0.5 and _SLOT_CACHE["ctx"] is not None:
+        return _SLOT_CACHE["ctx"]
+    p = props_to_params(s)
+    lay = slot_layout(p, shape, idx)
+    data = slot_edits_load(obj)
+    ctx = dict(obj=obj, s=s, p=p, lay=lay, data=data, entry=slot_edits_match(data, lay["key"]))
+    _SLOT_CACHE.update(t=now, sig=sig, ctx=ctx)
+    return ctx
+
+
+def _slot_sel_tag(s):
+    if s.ranura_add >= 0:
+        return ("add", s.ranura_add)
+    if s.ranura_f < 0:
+        return None
+    return (s.ranura_f, s.ranura_k)
+
+
+_SLOT_LOCK = [False]
+_SLOT_NONE_ITEMS = [("__GLOBAL__", "—", "")]
+
+
+def _slot_style_items(self, context):
+    kind = {"win": "window", "door": "door", "bal": "balcony"}.get(self.ranura_kind)
+    if kind is None:
+        return _SLOT_NONE_ITEMS
+    return _items(kind, "__GLOBAL__", "Igual que el resto", ("__NONE__", "Sin estilo", ""))
+
+
+def _slot_load_ui(context, ctx=None):
+    """Copia a la interfaz los valores de la ranura elegida."""
+    s = context.scene.cs2_building
+    tag = _slot_sel_tag(s)
+    ctx = ctx or slot_ctx(context, fresh=True)
+    if ctx is None or tag is None:
+        return
+    ef = slot_effective(ctx["lay"], ctx["entry"], tag)
+    if ef is None:
+        return
+    _SLOT_LOCK[0] = True
+    try:
+        s.ranura_kind = ef["kind"] if ef["kind"] in ("win", "door", "bal", "shop", "none") else "win"
+        s.ranura_w, s.ranura_h, s.ranura_sill, s.ranura_da = ef["w"], ef["h"], ef["sill"], ef["da"]
+        try:
+            s.ranura_style = ef["style"]
+        except TypeError:
+            s.ranura_style = "__GLOBAL__"
+    finally:
+        _SLOT_LOCK[0] = False
+
+
+def _slot_commit(context, ctx, fields, tags=None):
+    """Escribe una edición en el objeto forma y avisa que hay cambios sin aplicar."""
+    s = ctx["s"]
+    tag = _slot_sel_tag(s)
+    if tag is None:
+        return
+    entry = ctx["entry"] or slot_entry_for(ctx["data"], ctx["lay"]["key"], create=True)
+    if tags is None:
+        tags = slot_scope_tags(ctx["lay"], tag, s.ranura_scope)
+    slot_set_fields(entry, tags, fields)
+    slot_edits_save(ctx["obj"], ctx["data"])
+    slot_cache_clear()
+    _on_change(s, context)
+
+
+def _slot_field_update(field):
+    def upd(self, context):
+        if _SLOT_LOCK[0]:
+            return
+        ctx = slot_ctx(context, fresh=True)
+        if ctx is None or _slot_sel_tag(self) is None:
+            return
+        if field == "kind":
+            fields = {"kind": self.ranura_kind, "w": None, "h": None, "sill": None, "style": None}
+        elif field == "style":
+            fields = {"style": None if self.ranura_style == "__GLOBAL__" else self.ranura_style}
+        else:
+            fields = {field: float(getattr(self, "ranura_" + field))}
+        _slot_commit(context, ctx, fields)
+        if field == "kind":
+            _slot_load_ui(context)
+    return upd
+
+
+def _install_slot_props():
+    ba = CS2BuildingProps.__annotations__
+    ba["ranura_f"] = IntProperty(default=-1)
+    ba["ranura_k"] = IntProperty(default=0)
+    ba["ranura_add"] = IntProperty(default=-1)
+    ba["ranura_scope"] = EnumProperty(name="Vale para", default="SLOT",
+                                      items=[("SLOT", "Esta ranura", ""), ("COLUMN", "Su columna", "Todas las ranuras de la misma columna"),
+                                             ("FLOOR", "Su piso", "Todas las ranuras del mismo piso"), ("WALL", "Toda la pared", "")])
+    ba["ranura_kind"] = EnumProperty(name="Tipo", default="win", items=SLOT_KINDS, update=_slot_field_update("kind"))
+    ba["ranura_style"] = EnumProperty(name="Estilo", items=_slot_style_items, update=_slot_field_update("style"))
+    ba["ranura_w"] = FloatProperty(name="Ancho (m)", default=1.2, min=0.4, max=12.0, update=_slot_field_update("w"))
+    ba["ranura_h"] = FloatProperty(name="Alto (m)", default=1.4, min=0.3, max=8.0, update=_slot_field_update("h"))
+    ba["ranura_sill"] = FloatProperty(name="Antepecho (m)", default=0.9, min=0.0, max=6.0, update=_slot_field_update("sill"))
+    ba["ranura_da"] = FloatProperty(name="Correr (m)", default=0.0, min=-12.0, max=12.0, update=_slot_field_update("da"),
+                                    description="Mueve la ranura a lo largo de la pared respecto de su lugar automático")
+
+
+_install_slot_props()
+
+
+class CS2_OT_ranura_pick(bpy.types.Operator):
+    bl_idname = "cs2.ranura_pick"
+    bl_label = "Elegir ranura"
+    bl_description = "Elige esta abertura para editarla"
+    bl_options = {"INTERNAL"}
+    f: IntProperty(default=-1)
+    k: IntProperty(default=0)
+    add: IntProperty(default=-1)
+
+    def execute(self, context):
+        s = context.scene.cs2_building
+        s.ranura_f, s.ranura_k, s.ranura_add = self.f, self.k, self.add
+        _slot_load_ui(context)
+        return {"FINISHED"}
+
+
+def _slot_op_ctx(op, context):
+    ctx = slot_ctx(context, fresh=True)
+    if ctx is None:
+        op.report({"WARNING"}, "Elegí una pared en «Caras elegidas» (cara activa) para editar sus aberturas")
+        return None
+    if _slot_sel_tag(context.scene.cs2_building) is None:
+        op.report({"WARNING"}, "Primero elegí una ranura de la grilla")
+        return None
+    return ctx
+
+
+class CS2_OT_ranura_add(bpy.types.Operator):
+    bl_idname = "cs2.ranura_add"
+    bl_label = "Agregar a la derecha"
+    bl_description = "Agrega una ventana nueva en el mismo piso, a la derecha de la ranura elegida"
+    bl_options = {"REGISTER", "UNDO"}
+    duplicar: BoolProperty(default=False)
+
+    def execute(self, context):
+        ctx = _slot_op_ctx(self, context)
+        if ctx is None:
+            return {"CANCELLED"}
+        s = ctx["s"]
+        lay = ctx["lay"]
+        ef = slot_effective(lay, ctx["entry"], _slot_sel_tag(s))
+        if ef is None:
+            return {"CANCELLED"}
+        w = ef["w"] if self.duplicar else lay["defaults"]["ww"]
+        a = ef["a1"] + w / 2 + 0.25
+        if a + w / 2 > lay["amax"] - 0.12:
+            a = ef["a0"] - w / 2 - 0.25
+        new = {"f": ef["f"], "a": round(a, 3), "kind": ef["kind"] if self.duplicar else "win"}
+        if self.duplicar:
+            new.update(w=round(ef["w"], 3), h=round(ef["h"], 3), sill=round(ef["sill"], 3))
+            if ef["style"] != "__GLOBAL__":
+                new["style"] = ef["style"]
+        entry = ctx["entry"] or slot_entry_for(ctx["data"], lay["key"], create=True)
+        entry["add"].append(new)
+        slot_edits_save(ctx["obj"], ctx["data"])
+        slot_cache_clear()
+        s.ranura_f, s.ranura_k, s.ranura_add = -1, 0, len(entry["add"]) - 1
+        _on_change(s, context)
+        _slot_load_ui(context)
+        return {"FINISHED"}
+
+
+class CS2_OT_ranura_delete(bpy.types.Operator):
+    bl_idname = "cs2.ranura_delete"
+    bl_label = "Borrar"
+    bl_description = "Saca la abertura (o las de su columna, piso o pared, según «Vale para»)"
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        ctx = _slot_op_ctx(self, context)
+        if ctx is None:
+            return {"CANCELLED"}
+        s = ctx["s"]
+        tag = _slot_sel_tag(s)
+        if tag[0] == "add":
+            entry = ctx["entry"]
+            if entry and 0 <= tag[1] < len(entry["add"]):
+                entry["add"].pop(tag[1])
+            slot_edits_save(ctx["obj"], ctx["data"])
+            slot_cache_clear()
+            s.ranura_f, s.ranura_k, s.ranura_add = -1, 0, -1
+            _on_change(s, context)
+            return {"FINISHED"}
+        _slot_commit(context, ctx, {"kind": "none"})
+        _slot_load_ui(context)
+        return {"FINISHED"}
+
+
+class CS2_OT_ranura_reset(bpy.types.Operator):
+    bl_idname = "cs2.ranura_reset"
+    bl_label = "Restablecer"
+    bl_description = "Quita las ediciones de la ranura (o de su columna, piso o pared, según «Vale para») y vuelve al reparto automático"
+    bl_options = {"REGISTER", "UNDO"}
+    todo: BoolProperty(default=False, description="Quita todas las ediciones de la pared, incluidas las ranuras agregadas")
+
+    def execute(self, context):
+        ctx = slot_ctx(context, fresh=True)
+        if ctx is None:
+            self.report({"WARNING"}, "Elegí una pared en «Caras elegidas» (cara activa)")
+            return {"CANCELLED"}
+        s = ctx["s"]
+        entry = ctx["entry"]
+        if entry is None:
+            return {"FINISHED"}
+        tag = _slot_sel_tag(s)
+        if self.todo or tag is None:
+            ctx["data"]["walls"].remove(entry)
+        elif tag[0] == "add":
+            if 0 <= tag[1] < len(entry["add"]):
+                entry["add"].pop(tag[1])
+        else:
+            for tg in slot_scope_tags(ctx["lay"], tag, s.ranura_scope):
+                entry["ov"].pop(f"{tg[0]},{tg[1]}", None)
+        slot_edits_save(ctx["obj"], ctx["data"])
+        slot_cache_clear()
+        if self.todo or (tag and tag[0] == "add"):
+            s.ranura_f, s.ranura_k, s.ranura_add = -1, 0, -1
+        _on_change(s, context)
+        _slot_load_ui(context)
+        return {"FINISHED"}
+
+
+class CS2_OT_ranura_copy(bpy.types.Operator):
+    bl_idname = "cs2.ranura_copy"
+    bl_label = "Copiar ediciones"
+    bl_description = "Copia las ediciones de ranuras de esta pared para pegarlas en otra"
+
+    def execute(self, context):
+        ctx = slot_ctx(context, fresh=True)
+        if ctx is None:
+            self.report({"WARNING"}, "Elegí una pared en «Caras elegidas» (cara activa)")
+            return {"CANCELLED"}
+        e = ctx["entry"] or {}
+        context.window_manager["cs2_ranuras_copiadas"] = json.dumps({"ov": e.get("ov") or {}, "add": e.get("add") or []})
+        self.report({"INFO"}, "Ediciones copiadas" if (e.get("ov") or e.get("add")) else "Esta pared no tiene ediciones: se copia el reparto automático")
+        return {"FINISHED"}
+
+
+class CS2_OT_ranura_paste(bpy.types.Operator):
+    bl_idname = "cs2.ranura_paste"
+    bl_label = "Pegar ediciones"
+    bl_description = "Reemplaza las ediciones de ranuras de esta pared por las copiadas (las que no entren en esta pared se ignoran)"
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        ctx = slot_ctx(context, fresh=True)
+        raw = context.window_manager.get("cs2_ranuras_copiadas")
+        if ctx is None or not raw:
+            self.report({"WARNING"}, "Primero copiá las ediciones de otra pared y elegí esta con una cara activa")
+            return {"CANCELLED"}
+        clip = json.loads(raw)
+        entry = ctx["entry"]
+        if entry is not None:
+            ctx["data"]["walls"].remove(entry)
+        ctx["data"]["walls"].append({"key": list(ctx["lay"]["key"]), "ov": clip.get("ov") or {}, "add": clip.get("add") or []})
+        slot_edits_save(ctx["obj"], ctx["data"])
+        slot_cache_clear()
+        s = ctx["s"]
+        s.ranura_f, s.ranura_k, s.ranura_add = -1, 0, -1
+        _on_change(s, context)
+        return {"FINISHED"}
+
+
+_SLOT_SYM = {"win": "V", "door": "P", "bal": "B", "shop": "T", "none": "×"}
+
+
+def slot_grid(lay, entry):
+    """Cuadro del editor: (columnas [(centro, ("k", k) | ("add", i))], celdas {(piso, clave de columna): dict(kind, edited, tag)})."""
+    cols, seen, cells = [], set(), {}
+    ov = (entry or {}).get("ov") or {}
+    for x in lay["slots"]:
+        key = ("k", x["k"])
+        if key not in seen:
+            seen.add(key)
+            cols.append(((x["a0"] + x["a1"]) / 2, key))
+        e = ov.get(f"{x['f']},{x['k']}")
+        cells[(x["f"], key)] = dict(kind=(e or {}).get("kind") or x["kind"], edited=bool(e), tag=(x["f"], x["k"]))
+    for i, e in enumerate((entry or {}).get("add") or []):
+        key = ("add", i)
+        cols.append((float(e.get("a", 0.0)), key))
+        cells[(int(e.get("f", 1)), key)] = dict(kind=e.get("kind", "win"), edited=True, tag=("add", i))
+    cols.sort(key=lambda c: c[0])
+    return cols, cells
+
+
+class CS2_PT_ranuras(bpy.types.Panel):
+    bl_label = "Aberturas de la pared (ranuras)"
+    bl_idname = "CS2_PT_ranuras"
+    bl_space_type = "VIEW_3D"
+    bl_region_type = "UI"
+    bl_category = "CS2"
+
+    poll = _tab_poll("PERS")
+
+    def draw(self, context):
+        s = context.scene.cs2_building
+        lay = self.layout
+        editing, n = _faces_state(context)
+        if not editing or n == 0:
+            ui_note(lay, "Para editar las aberturas de una pared: «Elegir caras para editar solo esas» (arriba), "
+                         "hacé clic en la pared y acá aparece su grilla de ventanas y puertas.")
+            return
+        ctx = slot_ctx(context)
+        if ctx is None:
+            ui_note(lay, "Hacé clic en una pared de la forma (cara vertical) para ver sus aberturas.", icon="INFO")
+            return
+        L, entry = ctx["lay"], ctx["entry"]
+        lay.operator("cs2.generate", text="Actualizar edificio" + (" •" if _PENDING[0] else ""), icon="FILE_REFRESH")
+        ui_note(lay, f"{'Curva' if L['chain'] else 'Pared'} de {L['amax'] - L['amin']:.1f} m · {L['nfl']} piso(s). "
+                     "V ventana · P puerta · B balcón · T vidriera · × borrada · * editada")
+        cols, cells = slot_grid(L, entry)
+        sel = _slot_sel_tag(s)
+        if sel not in {c["tag"] for c in cells.values()}:
+            sel = None               # la ranura elegida era de otra pared
+        grid = lay.grid_flow(row_major=True, columns=len(cols) + 1, even_columns=True, even_rows=True, align=True)
+        for f in reversed(range(L["nfl"])):
+            grid.label(text="PB" if f == 0 else f"P{f}")
+            for _c, key in cols:
+                cell = cells.get((f, key))
+                if cell is None:
+                    grid.label(text="·")
+                    continue
+                op = grid.operator("cs2.ranura_pick", text=_SLOT_SYM.get(cell["kind"], "?") + ("*" if cell["edited"] else ""),
+                                   depress=(sel == cell["tag"]))
+                if cell["tag"][0] == "add":
+                    op.f, op.k, op.add = -1, 0, cell["tag"][1]
+                else:
+                    op.f, op.k, op.add = cell["tag"][0], cell["tag"][1], -1
+        row = lay.row(align=True)
+        row.operator("cs2.ranura_copy", text="Copiar", icon="COPYDOWN")
+        row.operator("cs2.ranura_paste", text="Pegar", icon="PASTEDOWN")
+        if sel is None:
+            ui_note(lay, "Elegí una ranura de la grilla para editarla.")
+            return
+        box = lay.box()
+        if sel[0] != "add":
+            box.prop(s, "ranura_scope", text="Vale para")
+        box.prop(s, "ranura_kind")
+        if s.ranura_kind in ("win", "door", "bal"):
+            box.prop(s, "ranura_style")
+        if s.ranura_kind != "none":
+            col = box.column(align=True)
+            for nm in ("ranura_w", "ranura_h") + (("ranura_sill",) if s.ranura_kind in ("win", "shop") else ()) + ("ranura_da",):
+                col.prop(s, nm)
+        row = box.row(align=True)
+        row.operator("cs2.ranura_add", text="Agregar ventana", icon="ADD").duplicar = False
+        row.operator("cs2.ranura_add", text="Duplicar", icon="DUPLICATE").duplicar = True
+        row = box.row(align=True)
+        row.operator("cs2.ranura_delete", icon="TRASH")
+        row.operator("cs2.ranura_reset", icon="LOOP_BACK").todo = False
+        lay.operator("cs2.ranura_reset", text="Restablecer toda la pared", icon="X").todo = True
+
+
 classes = (CS2BuildingProps, CS2WallProps, CS2_OT_generate, CS2_OT_cancel_generate, CS2_OT_check_holes, CS2_OT_random_seed, CS2_OT_sample_pieces,
            CS2_OT_export, CS2_OT_regen_lods, CS2_OT_from_mesh, CS2_OT_cs1_generate, CS2_OT_export_cs1, CS2_OT_clean_mesh, CS2_OT_grid, CS2_OT_batch, CS2_OT_create_shape, CS2_OT_delete_all, CS2_OT_reset,
            CS2_OT_edit_shape, CS2_OT_floor, CS2_OT_split_floors, CS2_OT_select_band,
@@ -16103,7 +16820,8 @@ classes = (CS2BuildingProps, CS2WallProps, CS2_OT_generate, CS2_OT_cancel_genera
            CS2_OT_preview_update, CS2_OT_uv_zone, CS2_OT_uv_pin, CS2_OT_uv_view,
            CS2_PT_panel,
            CS2_PT_forma,
-           CS2_PT_comp, CS2_PT_colores,
+           CS2_OT_ranura_pick, CS2_OT_ranura_add, CS2_OT_ranura_delete, CS2_OT_ranura_reset, CS2_OT_ranura_copy, CS2_OT_ranura_paste,
+           CS2_PT_comp, CS2_PT_ranuras, CS2_PT_colores,
            CS2_PT_tex, CS2_PT_mats, CS2_PT_uv, CS2_PT_bake,
            CS2_PT_export, CS2_PT_export_go, CS2_PT_ficha)
 

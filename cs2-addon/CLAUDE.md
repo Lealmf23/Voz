@@ -1,6 +1,6 @@
 # CS2 Generador de Edificios (add-on de Blender)
 
-Add-on de un solo archivo (`cs2_edificio_addon.py`, v2.80, ~16 300 líneas) que genera edificios low-poly
+Add-on de un solo archivo (`cs2_edificio_addon.py`, v2.81, ~16 900 líneas) que genera edificios low-poly
 para Cities: Skylines 2 (y CS1) con LODs, UV, texturas y exportación FBX. Blender 4.2+.
 
 ## Cómo trabajar con Leo
@@ -11,7 +11,7 @@ para Cities: Skylines 2 (y CS1) con LODs, UV, texturas y exportación FBX. Blend
 
 ## Pruebas (headless, sin abrir Blender)
     pip install bpy numpy pillow
-    python3 tests/run_tests.py                 # todo, ~11 min, 48 casos
+    python3 tests/run_tests.py                 # todo, ~11 min, 50 casos
     CS2_PERF_SCALE=2 python3 tests/run_tests.py perf_big   # si el equipo es el doble de lento que el de Leo
     python3 tests/run_tests.py roof_join scope_sync
     python3 tests/run_tests.py --update-baselines   # solo si la mejora es a propósito
@@ -72,6 +72,21 @@ para Cities: Skylines 2 (y CS1) con LODs, UV, texturas y exportación FBX. Blend
   estilo de ventana: `style_for` y `pieces_for` devuelven nada para `gls`) entre pilares, con el acceso dentro; `_add_shopfront` agrega pilares
   en los huecos entre tramos, la banda de cartel y toldos (`_add_awning`). Sobre una curva, `_chain_openings` usa un tramo por faceta.
 
+## Editor de fachada por ranuras (v2.81)
+- Panel «Aberturas de la pared (ranuras)» (`CS2_PT_ranuras`, pestaña Personalizar; hay que estar en «Elegir caras» con una pared activa): una
+  grilla por pisos y columnas (V ventana, P puerta, B balcón, T vidriera, × borrada, * editada). Se elige una ranura y se edita su tipo, estilo,
+  ancho, alto, antepecho y desplazamiento, «Vale para» ranura / columna / piso / pared; agregar, duplicar, borrar, restablecer, copiar y pegar.
+- Modelo: cada abertura automática de `shape_openings` lleva una etiqueta `(piso, columna)` (la puerta es `(0, -1)`); `p["_slot_last"]` deja el
+  reparto sin editar para la interfaz (`slot_layout`). Las ediciones viven en el objeto forma (`obj["cs2_slots"]`, JSON) con la clave geométrica
+  de la pared en coordenadas del mundo (`_slot_key_of`; una curva usa inicio de la primera faceta y final de la última) y se asocian a la pared
+  más cercana dentro de 0,3 m (`slot_edits_match`): sobreviven a regenerar y a mover poco la pared; si se mueve más, se pierden.
+- Las ediciones llegan a `shape_openings` por `cfg["_slots"]` (`attach_slot_edits` en `read_shape`) y se aplican con `apply_slot_edits`/`_slot_build`:
+  borrar, cambiar de tipo (con las medidas por defecto del tipo nuevo), medir, correr, estilo propio y ranuras agregadas (que no se pisen con otras).
+  El estilo propio de una abertura viaja en `p["_ss"]` y lo lee `style_for(p, mat, cfg, op)`. En una curva las ediciones se aplican en la pared desenrollada
+  (`_chain_virtual`) y después se reparten a las facetas.
+- Los paneles viejos de «Fachada» (`CS2_PT_alcance`, `_win`, `_door`, `_rev`, `_bal`...) ya no se registran desde que existen los cuadros de
+  componentes (`CS2_PT_comp`): no agregar interfaz nueva ahí. Lo de la grilla y «Elegir paredes por material» va en `CS2_PT_ranuras`/`CS2_PT_comp`.
+
 ## Herramientas de revisión (headless)
 - `tools/hojas_componentes.py <carpeta> <window|door|balcony>`: hojas de contacto con todos los estilos incluidos.
 - `tools/render_edificio.py <salida.png> [giro] [giro_pared_frontal]`: edificio con ladrillo y vista rápida para ver el giro.
@@ -79,7 +94,7 @@ para Cities: Skylines 2 (y CS1) con LODs, UV, texturas y exportación FBX. Blend
 - `comp.py` es una copia vieja del bloque de componentes que ya vive dentro de `cs2_edificio_addon.py`: no se importa en ningún lado.
 
 ## Estado y pendientes
-- 48/48 pruebas OK en v2.80 (`perf_big` con `CS2_PERF_SCALE` en equipos lentos).
+- 50/50 pruebas OK en v2.81 (`perf_big` con `CS2_PERF_SCALE` en equipos lentos).
 - Hecho en v2.77: errores silenciosos al informe (quedan solo los de la barra de progreso/redibujo y `ValueError` esperados de `bm.faces.new`),
   giro de texturas, material y giro por pared, antepechos macizos sin z-fighting, pruebas nuevas (rotación, materiales, auditoría, recorrido).
 - Visto en la revisión de componentes, sin tocar: las ventanas y puertas con forma (arco, círculo, óvalo...) se hunden en un nicho

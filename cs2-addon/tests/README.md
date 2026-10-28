@@ -44,6 +44,8 @@ Se ejecutan con el módulo `bpy` (sin abrir Blender):
 | grid | Retícula estructural: pilastras y losas en relieve (modos 1 a 3, cada N pisos, por pared), sin defectos ni errores |
 | shop | Planta baja comercial: vidriera con acceso, cartel, toldos, solo el frente, sobre una curva, sin defectos ni errores |
 | comp_groups | Los cuadros «Retícula» y «Planta comercial» aplican a las paredes elegidas y solo a ellas |
+| ranuras | Editor de fachada por ranuras: borrar, tipo, estilo, medidas, agregar, duplicar, copiar/pegar; alcance ranura/columna/piso/pared; sobrevive a regenerar y sigue a la pared si se mueve poco |
+| ranuras_curva | Lo mismo sobre una curva (reparto del arco entero) |
 | flow_full | Recorrido completo (crear, personalizar, regenerar, UV, sombras, texturas, exportar) sin errores en el informe |
 | mip_bleed | Con mipmaps (textura achicada) un material no toma el color de su vecino, en el atlas ni en el horneado |
 | quick_view | La vista rápida muestra la textura elegida sin UV ni horneado, se apaga y se actualiza con el botón |

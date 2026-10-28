@@ -1951,6 +1951,235 @@ def case_comp_groups():
     result(ok=True)
 
 
+def _edit_wall(s, ny, nx=0, piso=0):
+    """Entra a Editar forma y deja como cara activa la pared que mira a (nx, ny) (la más baja con `piso` = 0)."""
+    import bmesh
+    obj = s.shape_object
+    if obj.mode != "EDIT":
+        bpy.ops.cs2.edit_shape()
+    bm = bmesh.from_edit_mesh(obj.data)
+    cands = sorted((f for f in bm.faces if abs(f.normal.z) < 0.12 and f.normal.y * ny + f.normal.x * nx > 0.9),
+                   key=lambda f: f.calc_center_median().z)
+    for f in bm.faces:
+        f.select_set(False)
+    f = cands[piso]
+    f.select_set(True)
+    bm.faces.active = f
+    bmesh.update_edit_mesh(obj.data, loop_triangles=False, destructive=False)
+    a.slot_cache_clear()
+    return obj
+
+
+def _vidrio_en(o, x0, x1, z0, z1, mat=None):
+    """Caras de vidrio del frente (normal -Y) cuyo centro cae en ese rectángulo del plano de la pared."""
+    mat = a.MAT["glass"] if mat is None else mat
+    return [p for p in o.data.polygons if p.material_index == mat and p.normal.y < -0.9
+            and x0 <= p.center.x <= x1 and z0 <= p.center.z <= z1]
+
+
+def case_ranuras():
+    """Editor de fachada por ranuras: cada abertura se puede borrar, cambiar de tipo, medir, estilizar, correr y agregar, por ranura,
+    columna, piso o pared; las ediciones se guardan en la forma, sobreviven a regenerar y siguen a la pared si se mueve poco."""
+    import json
+    a._ERRLOG.clear()
+    s = setup("BOX", "FLAT", 20, 12, 4, styles=False)
+    fh = s.floor_height
+
+    def gen():
+        s.shape_object.update_tag()
+        bpy.ops.cs2.generate()
+        bpy.ops.cs2.regen_lods()
+        return lod_objs(s)[0]
+
+    def volver():
+        if s.shape_object.mode == "EDIT":
+            bpy.ops.cs2.edit_shape()
+        bpy.ops.cs2.regen_lods()
+        return lod_objs(s)[0]
+    obj = _edit_wall(s, -1)
+    ctx = a.slot_ctx(bpy.context, fresh=True)
+    check(ctx is not None, "no se pudo leer la pared activa")
+    lay = ctx["lay"]
+    pisos = lay["nfl"]
+    check(pisos == 4, f"la pared debía tener 4 pisos ({pisos})")
+    check(lay["slots"] and any(x["k"] == -1 for x in lay["slots"]), "faltan ranuras o la de la puerta")
+    cols = sorted({x["k"] for x in lay["slots"] if x["k"] >= 0})
+    sx = lay["key"][0]
+    xw = lambda am: sx + (am - lay["amin"])
+
+    def centro(f, k):
+        x = next(x_ for x_ in lay["slots"] if x_["f"] == f and x_["k"] == k)
+        return xw((x["a0"] + x["a1"]) / 2), x
+    # --- borrar una ranura
+    o = volver()
+    cx, sl = centro(1, 1)
+    base = len(_vidrio_en(o, cx - 0.3, cx + 0.3, fh, 2 * fh))
+    check(base > 0, "la ranura (1,1) debía tener vidrio antes de borrarla")
+    _edit_wall(s, -1)
+    bpy.ops.cs2.ranura_pick(f=1, k=1)
+    check(s.ranura_kind == sl["kind"], f"al elegir la ranura el tipo debía cargarse ({s.ranura_kind} vs {sl['kind']})")
+    s.ranura_kind = "none"
+    data = json.loads(shape_str := s.shape_object["cs2_slots"])
+    check(data["walls"][0]["ov"]["1,1"]["kind"] == "none", "la edición no se guardó en la forma")
+    o = volver()
+    check(not _vidrio_en(o, cx - 0.3, cx + 0.3, fh, 2 * fh), "la ranura borrada sigue teniendo vidrio")
+    check(len(_vidrio_en(o, cx + 1.0, cx + 4.0, fh, 2 * fh)) > 0, "se borró de más: las vecinas desaparecieron")
+    # --- sobrevive a regenerar y sigue a la pared si se mueve poco
+    o = gen()
+    check(not _vidrio_en(o, cx - 0.3, cx + 0.3, fh, 2 * fh), "la edición no sobrevivió a regenerar")
+    import bmesh
+    sobj = s.shape_object
+    bm = bmesh.new()
+    bm.from_mesh(sobj.data)
+    for v in bm.verts:
+        v.co.x += 0.0   # sin tocar la forma: control
+    for v in bm.verts:
+        if v.co.y < -5.9:
+            v.co.y -= 0.1       # correr el frente 10 cm: la clave sigue dentro de la tolerancia
+    bm.to_mesh(sobj.data)
+    bm.free()
+    sobj.data.update()
+    o = gen()
+    check(not _vidrio_en(o, cx - 0.3, cx + 0.3, fh, 2 * fh), "la edición se perdió al correr la pared 10 cm")
+    for v in sobj.data.vertices:
+        if v.co.y < -6.0:
+            v.co.y += 0.1
+    # --- columna entera, con el alcance elegido
+    _edit_wall(s, -1)
+    bpy.ops.cs2.ranura_reset(todo=True)
+    check("cs2_slots" not in s.shape_object, "restablecer toda la pared debía borrar las ediciones")
+    bpy.ops.cs2.ranura_pick(f=2, k=1)
+    s.ranura_scope = "COLUMN"
+    bpy.ops.cs2.ranura_delete()
+    ov = json.loads(s.shape_object["cs2_slots"])["walls"][0]["ov"]
+    check(all(f"{f},1" in ov for f in range(1, pisos)), f"borrar la columna debía alcanzar todos los pisos ({sorted(ov)})")
+    o = volver()
+    for f in range(1, pisos):
+        check(not _vidrio_en(o, cx - 0.3, cx + 0.3, f * fh, (f + 1) * fh), f"piso {f}: la columna borrada sigue ahí")
+    # --- piso entero
+    _edit_wall(s, -1)
+    bpy.ops.cs2.ranura_reset(todo=True)
+    bpy.ops.cs2.ranura_pick(f=3, k=0)
+    s.ranura_scope = "FLOOR"
+    bpy.ops.cs2.ranura_delete()
+    o = volver()
+    check(not _vidrio_en(o, -9.0, 9.0, 3 * fh, 4 * fh), "el piso 3 debía quedar sin ventanas")
+    check(_vidrio_en(o, -9.0, 9.0, 2 * fh, 3 * fh), "el piso 2 no debía cambiar")
+    # --- agregar, duplicar y borrar lo agregado
+    _edit_wall(s, -1)
+    bpy.ops.cs2.ranura_reset(todo=True)
+    bpy.ops.cs2.ranura_pick(f=2, k=cols[0])
+    bpy.ops.cs2.ranura_delete()                      # libera el lugar de la ranura (2, primera columna)
+    bpy.ops.cs2.ranura_pick(f=2, k=cols[1])
+    antes = len(json.loads(s.shape_object["cs2_slots"])["walls"][0]["add"])
+    bpy.ops.cs2.ranura_add(duplicar=True)
+    ent = json.loads(s.shape_object["cs2_slots"])["walls"][0]
+    check(len(ent["add"]) == antes + 1 and s.ranura_add == len(ent["add"]) - 1, "duplicar debía agregar una ranura y elegirla")
+    s.ranura_w = 0.8
+    check(abs(json.loads(s.shape_object["cs2_slots"])["walls"][0]["add"][-1]["w"] - 0.8) < 1e-6, "el ancho de la ranura agregada no se guardó")
+    bpy.ops.cs2.ranura_delete()
+    check(len(json.loads(s.shape_object["cs2_slots"])["walls"][0]["add"]) == antes, "borrar una ranura agregada debía sacarla")
+    # --- estilo propio de una ranura: solo esa ventana lleva el estilo
+    _edit_wall(s, -1)
+    bpy.ops.cs2.ranura_reset(todo=True)
+    ventana = next(x for x in a.slot_ctx(bpy.context, fresh=True)["lay"]["slots"] if x["kind"] == "win" and x["f"] == 2)
+    bpy.ops.cs2.ranura_pick(f=ventana["f"], k=ventana["k"])
+    s.ranura_scope = "SLOT"
+    s.ranura_style = "Ventana 2x2 cuarterones"
+    ov = json.loads(s.shape_object["cs2_slots"])["walls"][0]["ov"][f"{ventana['f']},{ventana['k']}"]
+    check(ov.get("style") == "Ventana 2x2 cuarterones", f"el estilo no se guardó ({ov})")
+    o = volver()
+    cx2 = xw((ventana["a0"] + ventana["a1"]) / 2)
+    z0w, z1w = ventana["z0"], ventana["z1"]
+    con = [p for p in o.data.polygons if p.material_index == a.MAT["trim"] and p.normal.y < -0.9 and abs(p.center.x - cx2) < 0.8 and z0w <= p.center.z <= z1w]
+    otra = next(x for x in lay["slots"] if x["kind"] == "win" and x["f"] == 2 and x["k"] != ventana["k"])
+    cx3 = xw((otra["a0"] + otra["a1"]) / 2)
+    sin = [p for p in o.data.polygons if p.material_index == a.MAT["trim"] and p.normal.y < -0.9 and abs(p.center.x - cx3) < 0.8 and otra["z0"] <= p.center.z <= otra["z1"]]
+    check(len(con) > len(sin) + 3, f"la ventana con estilo debía tener más molduras ({len(con)} vs {len(sin)})")
+    # --- cambiar el tipo: una ventana pasa a puerta-balcón
+    _edit_wall(s, -1)
+    bpy.ops.cs2.ranura_reset(todo=True)
+    bpy.ops.cs2.ranura_pick(f=ventana["f"], k=ventana["k"])
+    s.ranura_kind = "bal"
+    p2 = a.props_to_params(s)
+    ef = a.slot_effective(a.slot_ctx(bpy.context, fresh=True)["lay"], a.slot_ctx(bpy.context, fresh=True)["entry"], (ventana["f"], ventana["k"]))
+    check(ef["kind"] == "bal" and abs(ef["h"] - 2.1) < 1e-6, f"al pasar a balcón debía tomar la altura de puerta ({ef})")
+    o = volver()
+    check(any(min(o.data.vertices[i].co.y for i in q.vertices) < lay["key"][1] - 0.5 for q in o.data.polygons
+              if abs(q.center.x - cx2) < 1.2 and fh * ventana["f"] - 0.3 < q.center.z < fh * (ventana["f"] + 1)), "el balcón nuevo no sale de la pared")
+    # --- copiar las ediciones de una pared y pegarlas en otra
+    _edit_wall(s, -1)
+    bpy.ops.cs2.ranura_reset(todo=True)
+    bpy.ops.cs2.ranura_pick(f=1, k=cols[0])
+    s.ranura_scope = "FLOOR"
+    bpy.ops.cs2.ranura_delete()
+    bpy.ops.cs2.ranura_copy()
+    _edit_wall(s, 1)                      # la pared del fondo
+    bpy.ops.cs2.ranura_paste()
+    ent = json.loads(s.shape_object["cs2_slots"])["walls"]
+    check(len(ent) == 2 and ent[0]["key"] != ent[1]["key"] and ent[0]["ov"] == ent[1]["ov"], "pegar debía copiar las ediciones a la otra pared")
+    o = volver()
+    check(not [p for p in o.data.polygons if p.material_index == a.MAT["glass"] and p.normal.y > 0.9 and fh < p.center.z < 2 * fh],
+          "pegar no sacó las ventanas del piso 1 del fondo")
+    _edit_wall(s, -1)
+    bpy.ops.cs2.ranura_reset(todo=True)
+    _edit_wall(s, 1)
+    bpy.ops.cs2.ranura_reset(todo=True)
+    volver()
+    check(not a._ERRLOG, "quedaron errores registrados: " + "; ".join(f"{e['where']}: {e['msg'][:80]}" for e in a._ERRLOG[:4]))
+    result(ranuras=len(lay["slots"]), columnas=len(cols))
+
+
+def case_ranuras_curva():
+    """Las ranuras también se editan sobre una curva: el reparto es el del arco entero, borrar una ranura la saca de su faceta y la
+    edición sobrevive a regenerar."""
+    import json
+    import math
+    a._ERRLOG.clear()
+    s = setup("BOX", "FLAT", 16, 16, 4, styles=False)
+    fh = s.floor_height
+    _prisma(s.shape_object, [(8 * math.cos(2 * math.pi * i / 24), 8 * math.sin(2 * math.pi * i / 24)) for i in range(24)])
+    s.curve_deg = 25.0
+
+    def ventanas(o):
+        return sum(1 for p in o.data.polygons if p.material_index == a.MAT["glass"] and fh < p.center.z < 2 * fh)
+
+    def volver():
+        if s.shape_object.mode == "EDIT":
+            bpy.ops.cs2.edit_shape()
+        bpy.ops.cs2.regen_lods()
+        return lod_objs(s)[0]
+    bpy.ops.cs2.generate()
+    bpy.ops.cs2.regen_lods()
+    base = ventanas(lod_objs(s)[0])
+    check(base > 6, f"la curva debía tener ventanas en el piso 1 ({base})")
+    _edit_wall(s, -1)
+    ctx = a.slot_ctx(bpy.context, fresh=True)
+    check(ctx is not None and ctx["lay"]["chain"], "la pared activa debía ser una curva")
+    sl = [x for x in ctx["lay"]["slots"] if x["f"] == 1]
+    check(len(sl) >= 6, f"la curva debía tener varias ranuras en el piso 1 ({len(sl)})")
+    destino = sl[len(sl) // 2]
+    bpy.ops.cs2.ranura_pick(f=destino["f"], k=destino["k"])
+    s.ranura_kind = "none"
+    ent = json.loads(s.shape_object["cs2_slots"])["walls"][0]
+    check(len(ent["key"]) == 6 and ent["ov"], "la edición de la curva no se guardó")
+    o = volver()
+    check(ventanas(o) == base - 1, f"debía quedar una ventana menos ({ventanas(o)} vs {base})")
+    bpy.ops.cs2.generate()
+    bpy.ops.cs2.regen_lods()
+    check(ventanas(lod_objs(s)[0]) == base - 1, "la edición de la curva no sobrevivió a regenerar")
+    # el tipo y el estilo también se aplican
+    _edit_wall(s, -1)
+    bpy.ops.cs2.ranura_pick(f=destino["f"], k=destino["k"])
+    s.ranura_kind = "win"
+    s.ranura_style = "Ventana 2x2 cuarterones"
+    o = volver()
+    check(ventanas(o) >= base, f"al volver a ventana debía recuperarse la que faltaba ({ventanas(o)} vs {base})")
+    check(all(finite_mesh(x.data) for x in lod_objs(s)), "malla con valores inválidos")
+    check(not a._ERRLOG, "quedaron errores registrados: " + "; ".join(f"{e['where']}: {e['msg'][:80]}" for e in a._ERRLOG[:4]))
+    result(base=base)
+
+
 CASES = {k[5:]: v for k, v in globals().items() if k.startswith("case_")}
 
 if __name__ == "__main__":
