@@ -7328,15 +7328,25 @@ class _Unwrapper:
         budget = UV_CFG["pack_budget_s"]
         t0 = time.time()
         s, best = 0.0, {}
+        # tope por área: con la escala s las islas ocupan al menos sum(w·h·wt²)·s² del mapa (las tiras recortadas, menos); se parte de
+        # un poco más que eso en vez de 1.0, así la bisección llega a la misma precisión con la mitad de intentos
+        area = sum(it["w"] * it["h"] * it["wt"] ** 2 for it in self.uniq)
+        hi0 = min(1.0, 1.3 / math.sqrt(area)) if area > 1e-12 else 1.0
         for oi in range(len(self.orders)):      # se queda el orden que da más píxeles por metro
-            lo, hi = max(1e-6, s), 1.0
+            lo, hi = max(1e-6, s), hi0
             cur = None
             attempt = self.attempt
             if oi > 0 and (time.time() - t0 > budget / 2 or attempt(lo, oi) is None):
                 continue                    # sin tiempo, o este orden no supera lo que ya se consiguió
+            if hi < 1.0:
+                got = attempt(hi, oi)
+                if got is not None:         # entra todo hasta en el tope (muchas tiras recortadas): se busca hasta 1.0
+                    lo, cur, hi = hi, got, 1.0
             for _ in range(13):
                 if time.time() - t0 > budget and cur is not None:
                     break                   # tope de tiempo: se queda con lo logrado
+                if hi - lo <= 0.002 * hi:
+                    break                   # precisión suficiente (0,2 % de nitidez)
                 mid = (lo + hi) / 2
                 got = attempt(mid, oi)
                 if got is None:
@@ -7983,6 +7993,136 @@ def ensure_textures(context, p, objs, a=0.0, b=0.5):
 
 
 
+def _uv_frames(P, uv, N):
+    """Marco tangente (T, B) por triángulo para una capa UV (vectorizado). P: (n,3,3), uv: (n,3,2), N: (n,3)."""
+    import numpy as np
+    dP1, dP2 = P[:, 1] - P[:, 0], P[:, 2] - P[:, 0]
+    d1, d2 = uv[:, 1] - uv[:, 0], uv[:, 2] - uv[:, 0]
+    det = d1[:, 0] * d2[:, 1] - d2[:, 0] * d1[:, 1]
+    ok = np.abs(det) > 1e-12
+    r = np.where(ok, 1.0 / np.where(ok, det, 1.0), 0.0)[:, None]
+    T = (dP1 * d2[:, 1:2] - dP2 * d1[:, 1:2]) * r
+    B = (dP2 * d1[:, 0:1] - dP1 * d2[:, 0:1]) * r
+    T = T - N * np.sum(N * T, 1, keepdims=True)
+    nt = np.linalg.norm(T, axis=1, keepdims=True)
+    ok &= nt[:, 0] > 1e-12
+    T = T / np.maximum(nt, 1e-12)
+    NxT = np.cross(N, T)
+    sgn = np.where(np.sum(NxT * B, 1) >= 0, 1.0, -1.0)[:, None]
+    return T, NxT * sgn, ok
+
+
+def uv_transfer(me, base_name, uni_name, size, arrays, margin, keys=TEX_SUFFIXES):
+    """Pasa los mapas del atlas (UV `base_name`, con repetición) a las UV únicas (`uni_name`) sin Cycles: cada texel de una isla toma el
+    color del atlas en su punto (bilineal) y la normal se gira del marco tangente del atlas al de la isla. Afuera de las islas se extiende
+    el borde `margin` píxeles (como el margen EXTEND del horneo). Devuelve ({mapa: RGBA size x size}, cobertura)."""
+    import numpy as np
+    from PIL import Image, ImageDraw, ImageFilter
+    sub_mats = SUB_MATS
+    nl = len(me.loops)
+    bu = np.empty(nl * 2, np.float32); me.uv_layers[base_name].data.foreach_get("uv", bu); bu = bu.reshape(-1, 2).astype(np.float64)
+    uu = np.empty(nl * 2, np.float32); me.uv_layers[uni_name].data.foreach_get("uv", uu); uu = uu.reshape(-1, 2).astype(np.float64)
+    co = np.empty(len(me.vertices) * 3, np.float32); me.vertices.foreach_get("co", co); co = co.reshape(-1, 3).astype(np.float64)
+    me.calc_loop_triangles()
+    nt = len(me.loop_triangles)
+    tl = np.empty(nt * 3, np.int32); me.loop_triangles.foreach_get("loops", tl); tl = tl.reshape(-1, 3)
+    tv = np.empty(nt * 3, np.int32); me.loop_triangles.foreach_get("vertices", tv); tv = tv.reshape(-1, 3)
+    tp = np.empty(nt, np.int32); me.loop_triangles.foreach_get("polygon_index", tp)
+    pm = np.empty(len(me.polygons), np.int32); me.polygons.foreach_get("material_index", pm)
+    pn = np.empty(len(me.polygons) * 3, np.float32); me.polygons.foreach_get("normal", pn); pn = pn.reshape(-1, 3).astype(np.float64)
+    keep = ~np.isin(pm[tp], np.array(sub_mats))
+    # quién es dueño de cada texel: se dibujan los triángulos con su número (el primero que lo toma se lo queda: se dibuja al revés)
+    img = Image.new("I", (size, size), 0)
+    dr = ImageDraw.Draw(img)
+    ids = np.nonzero(keep)[0]
+    U = uu[tl[ids]] * size
+    for k in range(len(ids) - 1, -1, -1):
+        q = U[k]
+        dr.polygon([(q[0, 0], q[0, 1]), (q[1, 0], q[1, 1]), (q[2, 0], q[2, 1])], fill=int(ids[k]) + 1)
+    owner = np.asarray(img, np.int64) - 1          # fila = v * size (el eje v de la imagen va hacia abajo en PIL: mismo orden que el arreglo)
+    cov = owner >= 0
+    Ys, Xs = np.nonzero(cov)
+    t = owner[Ys, Xs]
+    p = (uu[tl[t]] * size).astype(np.float32)     # (m, 3, 2)
+    gx, gy = Xs.astype(np.float32) + 0.5, Ys.astype(np.float32) + 0.5
+    ax, ay, bx, by, cx, cy = p[:, 0, 0], p[:, 0, 1], p[:, 1, 0], p[:, 1, 1], p[:, 2, 0], p[:, 2, 1]
+    den = (by - cy) * (ax - cx) + (cx - bx) * (ay - cy)
+    den = np.where(np.abs(den) < 1e-9, 1e-9, den)
+    w0 = ((by - cy) * (gx - cx) + (cx - bx) * (gy - cy)) / den
+    w1 = ((cy - ay) * (gx - cx) + (ax - cx) * (gy - cy)) / den
+    w0, w1 = np.clip(w0, 0, 1), np.clip(w1, 0, 1)
+    w2 = np.clip(1.0 - w0 - w1, 0, 1)
+    sw = w0 + w1 + w2
+    w0, w1, w2 = w0 / sw, w1 / sw, w2 / sw
+    b = bu[tl[t]]
+    Us = w0 * b[:, 0, 0] + w1 * b[:, 1, 0] + w2 * b[:, 2, 0]
+    Vs = w0 * b[:, 0, 1] + w1 * b[:, 1, 1] + w2 * b[:, 2, 1]
+    # transformación de la normal por triángulo (atlas -> UV únicas)
+    P = co[tv]
+    N = pn[tp]
+    Tb, Bb, okb = _uv_frames(P, bu[tl], N)
+    Tu, Bu, oku = _uv_frames(P, uu[tl], N)
+    M = np.stack([np.sum(Tb * Tu, 1), np.sum(Bb * Tu, 1), np.sum(N * Tu, 1), np.sum(Tb * Bu, 1), np.sum(Bb * Bu, 1), np.sum(N * Bu, 1)], 1)
+    M[~(okb & oku)] = (1, 0, 0, 0, 1, 0)
+    # muestreo bilineal con repetición: índices y pesos una sola vez para todos los mapas (mismas coordenadas)
+    H, W = arrays[keys[0]].shape[:2]
+    x = (Us % 1.0) * W - 0.5
+    y = (Vs % 1.0) * H - 0.5
+    x0 = np.floor(x).astype(np.int64)
+    y0 = np.floor(y).astype(np.int64)
+    fx = (x - x0).astype(np.float32)
+    fy = (y - y0).astype(np.float32)
+    x0m, x1m, y0m, y1m = x0 % W, (x0 + 1) % W, (y0 % H) * W, ((y0 + 1) % H) * W
+    taps = ((y0m + x0m, (1 - fx) * (1 - fy)), (y0m + x1m, fx * (1 - fy)), (y1m + x0m, (1 - fx) * fy), (y1m + x1m, fx * fy))
+    del x, y, x0, y0, fx, fy
+    flat_idx = Ys * size + Xs
+    out = {}
+    for key in keys:
+        res = np.zeros((size * size, 4), np.float32)
+        arr = arrays[key]
+        if key == "Emissive" and float(arr[..., :3].max()) <= 0.0:
+            res[:, 3] = 1.0
+            out[key] = res.reshape(size, size, 4)
+            continue
+        a2 = np.ascontiguousarray(arr.reshape(H * W, 4), np.float32)
+        sm = None
+        for idx, w in taps:
+            g = a2.take(idx, 0)
+            g *= w[:, None]
+            if sm is None:
+                sm = g
+            else:
+                sm += g
+        if key == "Normal":
+            n = sm[:, :3] * 2.0 - 1.0
+            Mt = M[t].astype(np.float32)
+            xx = Mt[:, 0] * n[:, 0] + Mt[:, 1] * n[:, 1] + Mt[:, 2] * n[:, 2]
+            yy = Mt[:, 3] * n[:, 0] + Mt[:, 4] * n[:, 1] + Mt[:, 5] * n[:, 2]
+            zz = np.sqrt(np.clip(1.0 - xx * xx - yy * yy, 0.0, 1.0))
+            sm = np.stack([xx * 0.5 + 0.5, yy * 0.5 + 0.5, zz * 0.5 + 0.5, np.ones_like(xx)], 1)
+        res[flat_idx] = sm
+        out[key] = res.reshape(size, size, 4)
+    # margen: cada texel vacío toma el índice de un vecino cubierto (filtro de máximo de PIL, en C), `margin` veces
+    src = np.where(cov, np.arange(size * size, dtype=np.int64).reshape(size, size), -1).astype(np.int32)
+    im = Image.fromarray(src, "I")
+    for _ in range(margin):
+        grown = np.asarray(im.filter(ImageFilter.MaxFilter(3)), np.int32)
+        cur = np.asarray(im, np.int32)
+        nxt = np.where(cur >= 0, cur, grown)
+        im = Image.fromarray(nxt, "I")
+    src = np.asarray(im, np.int32)
+    grow = (~cov) & (src >= 0)
+    if grow.any():
+        gi = src[grow]
+        for key in keys:
+            out[key][grow] = out[key].reshape(-1, 4)[gi]
+    nrm = out.get("Normal")
+    if nrm is not None:                    # fuera de las islas y del margen: normal plana (el mipmap no la tuerce)
+        empty = src < 0
+        nrm[empty] = (0.5, 0.5, 1.0, 1.0)
+    return out, cov
+
+
 def bake_lod(context, src_mesh, p, arrays, size, ao=None, have_uv=False):
     """Transfiere las texturas de un LOD a sus UV únicas (capa 'CS2_unique', que se crea si falta) y les aplica la
     oclusión `ao` (si falta, se calcula). Devuelve (texturas, malla con UV únicas).
@@ -8040,116 +8180,16 @@ def bake_lod(context, src_mesh, p, arrays, size, ao=None, have_uv=False):
                                 max(4, int(p.get("bake_samples", 32))), only=only)
         size = ao.shape[0]
 
-        # --- material de horneo: una sola ranura; se restauran las ranuras y los índices al terminar
-        idx = np.empty(len(me.polygons), np.int32)
-        me.polygons.foreach_get("material_index", idx)
-        old_mats = list(me.materials)
-        me.polygons.foreach_set("material_index", np.zeros(len(idx), np.int32))
-        me.materials.clear()
-        mat = bpy.data.materials.new("cs2_bake_mat")
-        mat.use_nodes = True
-        nt = mat.node_tree
-        for nd in list(nt.nodes):
-            nt.nodes.remove(nd)
-        out = nt.nodes.new("ShaderNodeOutputMaterial")
-        emi = nt.nodes.new("ShaderNodeEmission")
-        pri = nt.nodes.new("ShaderNodeBsdfPrincipled")
-        uvn = nt.nodes.new("ShaderNodeUVMap")
-        uvn.uv_map = base_name
-        src = nt.nodes.new("ShaderNodeTexImage")
-        src.interpolation = "Linear"
-        nmap = nt.nodes.new("ShaderNodeNormalMap")
-        nmap.uv_map = base_name
-        tgt = nt.nodes.new("ShaderNodeTexImage")
-        nt.links.new(uvn.outputs["UV"], src.inputs["Vector"])
-        nt.links.new(emi.outputs["Emission"], out.inputs["Surface"])
-        me.materials.append(mat)
-
-        sc.render.engine = "CYCLES"
-        sc.cycles.device = "CPU"
-        keep_samples = sc.cycles.samples
-        bk.margin, bk.margin_type, bk.use_clear = bake_dilate_px(p, size), "EXTEND", True
-        if sc.world is None:
-            world_tmp = bpy.data.worlds.new("cs2_bake_world")
-            sc.world = world_tmp
-        keep_dist = sc.world.light_settings.distance
-        sc.world.light_settings.distance = float(p.get("bake_dist", 2.5))
-        asz = arrays["BaseColor"].shape[0]
-
-        def target(name):
-            img = bpy.data.images.new(name, size, size, alpha=True)
-            img.colorspace_settings.name = "Non-Color"
-            imgs.append(img)
-            tgt.image = img
-            nt.nodes.active = tgt
-            return img
-
-        def read(img):
-            a = np.empty(size * size * 4, np.float32)
-            img.pixels.foreach_get(a)
-            return a.reshape(size, size, 4)
-
-        def emit(key, channel):      # channel: None = RGB, "A" = canal alfa como gris
-            sim = _np_image(f"cs2_bsrc_{key}", arrays[key], asz)
-            imgs.append(sim)
-            src.image = sim
-            for l in list(emi.inputs["Color"].links):
-                nt.links.remove(l)
-            nt.links.new(src.outputs["Alpha" if channel == "A" else "Color"], emi.inputs["Color"])
-            for l in list(out.inputs["Surface"].links):
-                nt.links.remove(l)
-            nt.links.new(emi.outputs["Emission"], out.inputs["Surface"])
-            sc.cycles.samples = 4
-            t = target(f"cs2_bake_{key}{channel or ''}")
-            bpy.ops.object.bake(type="EMIT")
-            return read(t)
-
-        res = {}
-        base = emit("BaseColor", None)
+        # --- texturas: transferencia directa del atlas a las UV únicas (antes eran 6 horneos de Cycles por LOD)
+        res, _cov = uv_transfer(me, base_name, "CS2_unique", size, arrays, bake_dilate_px(p, size))
         k = float(p.get("bake_ao_str", 0.8))
+        base = res["BaseColor"]
         base[..., :3] *= (1.0 - k + k * np.maximum(ao, 0.15))[..., None]    # piso: ni un rincón queda negro puro
         base[..., 3] = 1.0
-        res["BaseColor"] = base
-        # normal (tangente, OpenGL) con el relieve de la textura
-        nim = _np_image("cs2_bsrc_Normal", arrays["Normal"], asz)
-        imgs.append(nim)
-        src.image = nim
-        for l in list(nmap.inputs["Color"].links):
-            nt.links.remove(l)
-        nt.links.new(src.outputs["Color"], nmap.inputs["Color"])
-        nt.links.new(nmap.outputs["Normal"], pri.inputs["Normal"])
-        for l in list(out.inputs["Surface"].links):
-            nt.links.remove(l)
-        nt.links.new(pri.outputs["BSDF"], out.inputs["Surface"])
-        sc.cycles.samples = 4
-        tn = target("cs2_bake_normal")
-        bpy.ops.object.bake(type="NORMAL", normal_space="TANGENT")
-        nrm = read(tn)
-        nrm[..., 3] = 1.0
-        res["Normal"] = nrm
-        for l in list(out.inputs["Surface"].links):
-            nt.links.remove(l)
-        nt.links.new(emi.outputs["Emission"], out.inputs["Surface"])
-        mk = emit("MaskMap", None)
-        mk[..., 3] = emit("MaskMap", "A")[..., 0]
-        res["MaskMap"] = mk
-        cm = emit("ControlMask", None)
-        cm[..., 3] = emit("ControlMask", "A")[..., 0]
-        res["ControlMask"] = cm
-        if float(arrays["Emissive"][..., :3].max()) > 0.0:
-            em = emit("Emissive", None)
-            em[..., 3] = 1.0
-        else:
-            em = np.zeros((size, size, 4), np.float32)
-            em[..., 3] = 1.0
-        res["Emissive"] = em
-        sc.world.light_settings.distance = keep_dist
+        res["Normal"][..., 3] = 1.0
+        res["Emissive"][..., 3] = 1.0
 
         # --- restaurar ranuras e índices; la malla final lleva las UV únicas como UV0
-        me.materials.clear()
-        for m_ in old_mats:
-            me.materials.append(m_)
-        me.polygons.foreach_set("material_index", idx)
         if fixed:
             back = np.empty(n * 2, np.float32)
             me.uv_layers[base_name].data.foreach_get("uv", back)
