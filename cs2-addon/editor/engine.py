@@ -19,6 +19,14 @@ sys.path.insert(0, os.path.dirname(HERE))
 import bpy  # noqa: E402
 import bmesh  # noqa: E402
 from mathutils import Vector  # noqa: E402
+# Si Blender ya tiene instalada otra versión del add-on (la de tu carpeta de add-ons), se descarta: el motor usa SIEMPRE la de esta carpeta.
+old = sys.modules.get("cs2_edificio_addon")
+if old is not None and os.path.abspath(getattr(old, "__file__", "") or "") != os.path.join(os.path.dirname(HERE), "cs2_edificio_addon.py"):
+    try:
+        old.unregister()
+    except Exception:
+        pass
+    del sys.modules["cs2_edificio_addon"]
 import cs2_edificio_addon as a  # noqa: E402
 
 ARC_STEP = 12.0      # grados por faceta en las paredes curvas
