@@ -3655,7 +3655,8 @@ def build_curtain(bm, pts, n, p, wid, lod, cfg, L):
         return out
 
     hl = set()
-    inset = 0.0 if prof == 3 else max(pt, 0.03) / 2
+    g_rects = []
+    inset = 0.0      # el vidrio llega al eje del perfil: el perfil va delante y tapa la junta (si no, queda una rendija hacia adentro)
     for i in range(len(levels) - 1):
         z0, z1 = levels[i], levels[i + 1]
         if i == 0 and base_h:
@@ -3691,8 +3692,67 @@ def build_curtain(bm, pts, n, p, wid, lod, cfg, L):
                 za1 = zb[j + 1] - inset
                 if not panel and rect_fits(poly, ia0, ia1, za0, za1, 0.0):
                     quad(ia0, ia1, za0, za1, GL, glass)
+                    g_rects.append((ia0, ia1, za0, za1))
                 else:
                     opaque(ca0, ca1, zb[j], zb[j + 1], bmat)
+
+    # el vidrio está GL más adentro que las partes llenas: donde un paño no linda con otro vidrio, el escalón se cierra con un
+    # retorno (si no, mirando en diagonal se ve por la rendija el interior hueco del edificio)
+    r4 = lambda x_: round(x_, 4)
+    eh = {}
+    ev = {}
+    for a0, a1, z0, z1 in g_rects:
+        eh.setdefault(r4(z0), []).append((a0, a1, "b"))
+        eh.setdefault(r4(z1), []).append((a0, a1, "t"))
+        ev.setdefault(r4(a0), []).append((z0, z1, "l"))
+        ev.setdefault(r4(a1), []).append((z0, z1, "r"))
+
+    def uncovered(s0, s1, others):
+        """Tramos de [s0, s1] que no tapa ningún intervalo de `others`."""
+        out_, cur = [], s0
+        for o0, o1 in sorted(others):
+            if o1 <= cur + 1e-4 or o0 >= s1 - 1e-4:
+                continue
+            if o0 > cur + 1e-4:
+                out_.append((cur, o0))
+            cur = max(cur, o1)
+        if s1 > cur + 1e-4:
+            out_.append((cur, s1))
+        return out_
+
+    def ret_face(pts_, want):
+        try:
+            f = bm.faces.new([bm.verts.new(q) for q in pts_])
+        except ValueError:
+            return
+        f.material_index = mmat
+        f.normal_update()
+        if f.normal.dot(want) < 0:
+            f.normal_flip()
+
+    runs_h, runs_v = {}, {}          # tramos a cerrar, juntados en tiras largas (menos triángulos)
+    for a0, a1, z0, z1 in g_rects:
+        for z, side in ((z0, "b"), (z1, "t")):
+            opp = "t" if side == "b" else "b"
+            runs_h.setdefault((r4(z), side), []).extend(uncovered(a0, a1, [(o0, o1) for o0, o1, k in eh.get(r4(z), ()) if k == opp]))
+        for a, side in ((a0, "l"), (a1, "r")):
+            opp = "r" if side == "l" else "l"
+            runs_v.setdefault((r4(a), side), []).extend(uncovered(z0, z1, [(o0, o1) for o0, o1, k in ev.get(r4(a), ()) if k == opp]))
+
+    def joined(ivs):
+        out_ = []
+        for s0, s1 in sorted(ivs):
+            if out_ and s0 <= out_[-1][1] + 1e-4:
+                out_[-1][1] = max(out_[-1][1], s1)
+            else:
+                out_.append([s0, s1])
+        return out_
+    for (z, side), ivs in runs_h.items():
+        for s0, s1 in joined(ivs):
+            ret_face([P(s0, z, GL), P(s1, z, GL), P(s1, z, 0.0), P(s0, z, 0.0)], zax if side == "b" else -zax)
+    for (a, side), ivs in runs_v.items():
+        for s0, s1 in joined(ivs):
+            ret_face([P(a, s0, GL), P(a, s1, GL), P(a, s1, 0.0), P(a, s0, 0.0)], u if side == "l" else -u)
 
     def round_post(a, d_out, r, z0, z1, mat, horizontal=False, a1=None):
         """Perfil de sección redondeada (prisma de 8 lados), vertical u horizontal."""

@@ -2318,6 +2318,47 @@ def case_ao_homog():
     result(**err)
 
 
+def case_curtain_seal():
+    """Muro cortina: mirando en diagonal no se ve el interior hueco del edificio por rendijas entre el vidrio y los perfiles
+    o las bandas (rayos desde afuera que pasan más de 35 cm detrás del plano de la pared)."""
+    import math
+    from mathutils import Vector
+    from mathutils.bvhtree import BVHTree
+    s = setup("BOX", "FLAT", 14, 10, 4, styles=False)
+    a.lib_ensure()
+    dirs = []
+    for ah in (-60, -30, 0, 30, 60):
+        for av in (-40, 0, 40):
+            h, v = math.radians(ah), math.radians(av)
+            dirs.append(Vector((math.sin(h) * math.cos(v), math.cos(h) * math.cos(v), math.sin(v))))
+    out = {}
+    for nm in ("Cortina estándar", "Perfiles redondos", "Esquinas marcadas", "Vidrio estructural", "Cortina con zócalo y cornisa"):
+        bpy.ops.cs2.comp_curtain("EXEC_DEFAULT", alcance="ALL", cw_on_g=True, estilo=nm, estilo_cargado="NONE")
+        bpy.ops.cs2.generate()
+        bpy.ops.cs2.regen_lods()
+        ob = lod_objs(s)[0]
+        me = ob.data
+        me.calc_loop_triangles()
+        verts = [ob.matrix_world @ v.co for v in me.vertices]
+        bvh = BVHTree.FromPolygons(verts, [tuple(t.vertices) for t in me.loop_triangles])
+        zt = max(v.z for v in verts)
+        yw = -5.0
+        leaks = n = 0
+        for ix in range(70):
+            x = -6.0 + ix * (12.0 / 70)
+            for iz in range(30):
+                P = Vector((x, yw, 0.5 + iz * ((zt - 1.0) / 30)))
+                for d in dirs:
+                    h = bvh.ray_cast(P - d * 3.0, d, 6.0)
+                    n += 1
+                    if h[0] is None or h[0].y > yw + 0.35:
+                        leaks += 1
+        out[nm] = round(leaks / n * 100, 2)
+    bad = {k: v for k, v in out.items() if v > 0.05}
+    check(not bad, f"se ve el interior por rendijas (% de rayos): {bad}")
+    result(**out)
+
+
 def case_tex_no_pil():
     """Las texturas se arman sin PIL (el Python de Blender no la trae): se bloquea la importación y se asignan igual."""
     import builtins
