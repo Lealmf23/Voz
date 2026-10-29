@@ -1,6 +1,6 @@
 # CS2 Generador de Edificios (add-on de Blender)
 
-Add-on de un solo archivo (`cs2_edificio_addon.py`, v2.86, ~16 700 líneas) que genera edificios low-poly
+Add-on de un solo archivo (`cs2_edificio_addon.py`, v2.87, ~16 700 líneas) que genera edificios low-poly
 para Cities: Skylines 2 (y CS1) con LODs, UV, texturas y exportación FBX. Blender 4.2+.
 
 ## Cómo trabajar con Leo
@@ -122,6 +122,14 @@ para Cities: Skylines 2 (y CS1) con LODs, UV, texturas y exportación FBX. Blend
   Las sombras tardan más (≈ 9 → 22 s en esa BOX). Prueba `ao_homog`.
 - `tools/seams.py` (error contra la sombra exacta) y `tools/render_horneado.py <salida> [fuerza] [--liso] [--sin-compartir]` para revisarlo.
 
+## Muro cortina y molduras (v2.87)
+- `build_curtain`: el vidrio llega al eje de los perfiles (antes se cortaba antes y los perfiles redondos o finos dejaban rendijas) y
+  cada borde del vidrio que no linda con otro vidrio se cierra con un retorno de GL a 0 (tiras unidas). Sin eso, mirando en diagonal se
+  veía el interior hueco del edificio. Prueba `curtain_seal` (rayos oblicuos que pasan 35 cm detrás de la pared).
+- `_wall_sink_openings`: en Blender 5 `extrude_face_region` no devuelve las caras laterales del hueco en `geom`; se toman de los vértices
+  nuevos. `_reveal_mat`: con moldura (estilo `casing_w` o marco saliente de la pared `cas_w`) las jambas van del color de la moldura.
+  La moldura de los estilos ahora tiene también el canto interior. Prueba `casing_reveal`.
+
 ## Herramientas de revisión (headless)
 - `tools/hojas_componentes.py <carpeta> <window|door|balcony>`: hojas de contacto con todos los estilos incluidos.
 - `tools/render_edificio.py <salida.png> [giro] [giro_pared_frontal]`: edificio con ladrillo y vista rápida para ver el giro.
@@ -129,7 +137,7 @@ para Cities: Skylines 2 (y CS1) con LODs, UV, texturas y exportación FBX. Blend
 - `comp.py` es una copia vieja del bloque de componentes que ya vive dentro de `cs2_edificio_addon.py`: no se importa en ningún lado.
 
 ## Estado y pendientes
-- 54/54 pruebas OK en v2.86 con bpy 5.2.1 (Python 3.13, la versión de Leo; ya no hace falta probar en 4.5). `perf_big` con `CS2_PERF_SCALE`.
+- 56/56 pruebas OK en v2.87 con bpy 5.2.1 (Python 3.13, la versión de Leo; ya no hace falta probar en 4.5). `perf_big` con `CS2_PERF_SCALE`.
 - Tipos de fachada (v2.82): `FACADE_TYPES`/`FACADE_BASE` + `cs2.facade_type`, botones en `CS2_PT_comp` (Personalizar). Prueba `facade_types`.
 - `tools/ui_dump.py`: vuelca como texto lo que muestra cada pestaña (auditoría de la interfaz sin abrir Blender).
 - Cierre de Blender 5.2.1 reportado por Leo (2026-10-28): dentro del deshacer (`ED_undo_operator_repeat` → `memfile_undo_decode`)

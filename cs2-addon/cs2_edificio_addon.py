@@ -9,7 +9,7 @@ Después: Vista 3D > tecla N > pestaña "CS2".
 bl_info = {
     "name": "CS2 Generador de Edificios",
     "author": "Leo",
-    "version": (2, 86, 0),
+    "version": (2, 87, 0),
     "blender": (4, 2, 0),
     "location": "Vista 3D > Barra lateral (N) > CS2",
     "description": "Edificios low-poly de todo tipo (residencial, comercial, oficinas, industrial, servicios y emblemáticos) con LODs y FBX para Cities: Skylines 2",
@@ -687,7 +687,7 @@ def insert_style(bm, st, o, u, n, op, depth, p):
         outer2 = offset_poly(outer, cw)
         if is_door:
             outer2 = [(x, max(z, 0.0)) for x, z in outer2]
-        ring(outer2, outer, -cd, 0.0, TRIM, outer_sides=True)
+        ring(outer2, outer, -cd, 0.0, TRIM, outer_sides=True, inner_sides=True)
     top = h + (cw if cw > 0.005 else 0.0)
     over = w + 2 * (cw if cw > 0.005 else 0.0) + 0.16
     hd = cd + 0.04
@@ -3927,6 +3927,23 @@ def _wall_rect_faces(tmp, o, u, n, rects, extra=()):
     return out
 
 
+def _reveal_mat(p, cfg, op, sty_on, pan):
+    """Material de los lados del hueco (jambas, dintel y alféizar por dentro). Si la abertura tiene moldura (del estilo o
+    el marco saliente de la pared), van del color de la moldura: si no, por dentro del marco se vería la pared."""
+    m_ = op[4]
+    if sty_on and m_ != MAT["facade"]:
+        st_ = style_for(p, m_, cfg, op)
+        if st_ and float(st_.get("casing_w", 0.0) or 0.0) > 0.005:
+            if st_.get("kind") == "door":
+                return MAT["trim"]
+            return MAT[SURF_MATS.get(int((p.get("look") or {}).get("frm_mat", 1)), "trim")]
+    if m_ == MAT["glass"] and op[1] - op[0] >= 0.4:
+        L = look_cfg(p, cfg)
+        if float(L.get("cas_w", 0.0) or 0.0) > 0.005:
+            return MAT[SURF_MATS.get(int(L.get("cas_mat", 1)), "trim")]
+    return pan[0] if pan else MAT["facade"]
+
+
 def _wall_sink_openings(tmp, groups, ext, skip_back, n, p, cfg, ops, depths, pans, cut, styon):
     """Hunde cada abertura (extruye su cara hacia adentro) y asigna materiales a las caras resultantes."""
     for k, faces in groups.items():
@@ -3937,7 +3954,11 @@ def _wall_sink_openings(tmp, groups, ext, skip_back, n, p, cfg, ops, depths, pan
             res = bmesh.ops.extrude_face_region(tmp, geom=faces)
             newv = [g for g in res["geom"] if isinstance(g, bmesh.types.BMVert)]
             bmesh.ops.translate(tmp, vec=-n * depth, verts=newv)
-            ext += [(g, k) for g in res["geom"] if isinstance(g, bmesh.types.BMFace)]
+            caps = [g for g in res["geom"] if isinstance(g, bmesh.types.BMFace)]
+            ext += [(g, k) for g in caps]
+            # los lados del hueco (jambas, dintel, alféizar): el extrude de Blender 5 no siempre los devuelve en "geom"
+            cs_ = set(caps)
+            ext += [(g, k) for g in {f for v in newv for f in v.link_faces} if g not in cs_]
             # la cara original quedaba tapando el hueco (con la normal invertida) y el
             # vidrio no se veía desde afuera: se borra para abrir la ventana de verdad
             old = [fc for fc in faces if fc.is_valid]
@@ -3961,7 +3982,7 @@ def _wall_sink_openings(tmp, groups, ext, skip_back, n, p, cfg, ops, depths, pan
                 g.material_index = (MAT["facade"] if (styon(k, ops[k]) and (pieces_for(p, ops[k][4]) or style_for(p, ops[k][4], cfg, ops[k])))
                                     else ops[k][4])
             else:
-                g.material_index = pans[k][0] if k in pans else MAT["facade"]
+                g.material_index = _reveal_mat(p, cfg, ops[k], styon(k, ops[k]), pans.get(k))
         if drop:
             bmesh.ops.delete(tmp, geom=drop, context="FACES_ONLY")
 

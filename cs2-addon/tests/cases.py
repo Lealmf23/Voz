@@ -2359,6 +2359,31 @@ def case_curtain_seal():
     result(**out)
 
 
+def case_casing_reveal():
+    """Ventana con moldura: los lados del hueco (jambas, dintel y alféizar por dentro) van del color de la moldura, no de la pared.
+    Sin moldura siguen siendo pared."""
+    def sides(win_style):
+        s = setup("BOX", "FLAT", 14, 10, 2, styles=False, window_style=win_style, door_style="NONE", balconies="none",
+                  balcony_style="NONE")
+        bpy.ops.cs2.regen_lods()
+        me = lod_objs(s)[0].data
+        wd = float(s.win_depth)
+        mats = []
+        for poly in me.polygons:      # frente (y = -5): caras laterales dentro de la profundidad del hueco
+            c = poly.center
+            if abs(poly.normal.y) < 0.1 and -5.0 + 0.02 < c.y < -5.0 + wd - 0.02 and -6.5 < c.x < 6.5 and 3.2 < c.z < 5.6 \
+                    and poly.area > 0.15:      # piso alto (la puerta no lleva moldura); las caras grandes son las del hueco
+                mats.append(poly.material_index)
+        return mats
+    m1 = sides("Ventana moldura y repisa")
+    check(m1, "no hay lados de hueco")
+    bad = sum(1 for m in m1 if m != a.MAT["trim"])
+    check(bad == 0, f"{bad} de {len(m1)} lados del hueco no tienen el color de la moldura")
+    m2 = sides("Ventana 2 hojas")
+    check(m2 and all(m != a.MAT["trim"] for m in m2), "sin moldura, los lados del hueco no deben ser de moldura")
+    result(lados=len(m1), sin_moldura=len(m2))
+
+
 def case_tex_no_pil():
     """Las texturas se arman sin PIL (el Python de Blender no la trae): se bloquea la importación y se asignan igual."""
     import builtins
