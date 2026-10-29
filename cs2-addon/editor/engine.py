@@ -1,0 +1,681 @@
+"""Motor del editor: servidor local que usa Blender (módulo bpy) con el add-on para armar la malla real del edificio.
+Uso:  python3 engine.py [--port 8765]   (requiere `pip install bpy`; con Blender: blender -b -P engine.py)
+Endpoints:  GET /            editor.html y archivos estáticos
+            GET /catalog     estilos de ventanas, puertas y balcones, techos y materiales
+            POST /build      receta -> malla y reparto de aberturas por pared
+            POST /export     receta -> LODs + FBX/texturas en la carpeta pedida
+Receta: {verts:[[x,y]..], floors, floor_h, roof, props:{}, edges:[{bulge, mat, rot, ws, ds, bs, ov:{}, add:[]}..]}
+"""
+import json
+import math
+import os
+import sys
+import http.server
+import queue
+import threading
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.dirname(HERE))
+import bpy  # noqa: E402
+import bmesh  # noqa: E402
+from mathutils import Vector  # noqa: E402
+# Si Blender ya tiene instalada otra versión del add-on (la de tu carpeta de add-ons), se descarta: el motor usa SIEMPRE la de esta carpeta.
+old = sys.modules.get("cs2_edificio_addon")
+if old is not None and os.path.abspath(getattr(old, "__file__", "") or "") != os.path.join(os.path.dirname(HERE), "cs2_edificio_addon.py"):
+    try:
+        old.unregister()
+    except Exception:
+        pass
+    del sys.modules["cs2_edificio_addon"]
+import cs2_edificio_addon as a  # noqa: E402
+
+ARC_STEP = 12.0      # grados por faceta en las paredes curvas
+GLOBAL_PROPS = {"window_style", "door_style", "balcony_style", "balconies", "facade_color", "string_courses",
+                "mat_b_color", "mat_c_color", "mat_d_color", "trim_color", "roof_color", "door_color"}
+
+
+def area(pts):
+    return sum(pts[i][0] * pts[(i + 1) % len(pts)][1] - pts[(i + 1) % len(pts)][0] * pts[i][1] for i in range(len(pts))) / 2
+
+
+def expand(verts, edges):
+    """Planta con las curvas hechas facetas. Devuelve (puntos, borde de cada faceta, [facetas por borde])."""
+    n = len(verts)
+    pts, owner, facets = [], [], []
+    for i in range(n):
+        p0, p1 = verts[i], verts[(i + 1) % n]
+        bulge = float((edges[i] if i < len(edges) else {}).get("bulge", 0.0) or 0.0)
+        seg = [tuple(p0)]
+        c = math.hypot(p1[0] - p0[0], p1[1] - p0[1])
+        if abs(bulge) > 0.05 and c > 0.5:
+            h = abs(bulge)
+            R = (c * c / 4 + h * h) / (2 * h)
+            ang = 4 * math.atan2(h, c / 2)          # ángulo total del arco
+            k = max(2, int(math.ceil(math.degrees(ang) / ARC_STEP)))
+            mx, my = (p0[0] + p1[0]) / 2, (p0[1] + p1[1]) / 2
+            ox, oy = (p1[1] - p0[1]) / c, -(p1[0] - p0[0]) / c        # hacia afuera (planta antihoraria)
+            sg = 1 if bulge > 0 else -1
+            d = R - h
+            cx, cy = mx - ox * sg * d, my - oy * sg * d
+            a0 = math.atan2(p0[1] - cy, p0[0] - cx)
+            a1 = math.atan2(p1[1] - cy, p1[0] - cx)
+            pm = (mx + ox * sg * h, my + oy * sg * h)
+            am = math.atan2(pm[1] - cy, pm[0] - cx)
+            ccw = ((am - a0) % (2 * math.pi)) < ((a1 - a0) % (2 * math.pi))
+            span = ((a1 - a0) % (2 * math.pi)) if ccw else -((a0 - a1) % (2 * math.pi))
+            for j in range(1, k):
+                t = a0 + span * j / k
+                seg.append((cx + R * math.cos(t), cy + R * math.sin(t)))
+        seg.append(tuple(p1))
+        fs = []
+        for j in range(len(seg) - 1):
+            fs.append((seg[j], seg[j + 1]))
+            pts.append(seg[j])
+            owner.append(i)
+        facets.append(fs)
+    return pts, owner, facets
+
+
+def _dist_seg(p, s):
+    (x0, y0), (x1, y1) = s
+    dx, dy = x1 - x0, y1 - y0
+    L2 = dx * dx + dy * dy or 1e-9
+    t = max(0.0, min(1.0, ((p[0] - x0) * dx + (p[1] - y0) * dy) / L2))
+    return math.hypot(p[0] - (x0 + t * dx), p[1] - (y0 + t * dy))
+
+
+def _clean():
+    for o in list(bpy.data.objects):
+        bpy.data.objects.remove(o, do_unlink=True)
+    for c in list(bpy.data.collections):
+        bpy.data.collections.remove(c)
+
+
+def offset_poly(pts, owner, ins):
+    """Planta antihoraria desplazada hacia adentro: cada faceta `i` se corre `ins[owner[i]]` metros y las vecinas se unen en la esquina."""
+    n = len(pts)
+    lines = []
+    for i in range(n):
+        p, q = pts[i], pts[(i + 1) % n]
+        L = math.hypot(q[0] - p[0], q[1] - p[1]) or 1e-9
+        d = float(ins[owner[i]] or 0.0)
+        dx, dy = (q[0] - p[0]) / L, (q[1] - p[1]) / L
+        lines.append(((p[0] - dy * d, p[1] + dx * d), (dx, dy)))
+    out = []
+    for i in range(n):
+        (p0, d0), (p1, d1) = lines[i - 1], lines[i]
+        cr = d0[0] * d1[1] - d0[1] * d1[0]
+        if abs(cr) < 1e-6:
+            out.append(p1)
+            continue
+        t = ((p1[0] - p0[0]) * d1[1] - (p1[1] - p0[1]) * d1[0]) / cr
+        out.append((p0[0] + d0[0] * t, p0[1] + d0[1] * t))
+    for i in range(n):          # la planta no puede darse vuelta ni cruzarse
+        a0, a1, b0, b1 = pts[i], pts[(i + 1) % n], out[i], out[(i + 1) % n]
+        if (a1[0] - a0[0]) * (b1[0] - b0[0]) + (a1[1] - a0[1]) * (b1[1] - b0[1]) <= 0:
+            raise RuntimeError("El retranqueo es demasiado grande para esa pared")
+    if area(out) <= 0.5:
+        raise RuntimeError("El retranqueo deja el piso sin superficie")
+    return out
+
+
+def make_levels(pts, owner, facets_of, nedges, floors, fh, setbacks):
+    """Tramos de altura con su planta: [{z0, z1, P, facets}]. Los retranqueos solo pueden crecer hacia arriba (por pared)."""
+    sbs = sorted([sb for sb in (setbacks or []) if 1 <= int(sb.get("from", 0)) < floors], key=lambda sb: int(sb["from"]))
+    zs = [0.0] + [int(sb["from"]) * fh for sb in sbs] + [floors * fh]
+    cum = [0.0] * nedges
+    levels = [dict(z0=zs[0], z1=zs[1], P=list(pts), ins=list(cum))]
+    for k, sb in enumerate(sbs):
+        ins = list(sb.get("ins") or [])
+        ins += [0.0] * (nedges - len(ins))
+        cum = [max(cum[i], float(ins[i] or 0.0)) for i in range(nedges)]
+        levels.append(dict(z0=zs[k + 1], z1=zs[k + 2], P=offset_poly(pts, owner, cum), ins=list(cum)))
+    for lv in levels:
+        n = len(lv["P"])
+        fs = [[] for _ in range(nedges)]
+        for i in range(n):
+            fs[owner[i]].append((lv["P"][i], lv["P"][(i + 1) % n]))
+        lv["facets"] = fs
+    return levels
+
+
+def stepped_shape(ctx, levels, floors, fh):
+    """Malla cerrada con una planta por tramo (paredes, terrazas entre tramos y tapas)."""
+    bm = bmesh.new()
+    cache = {}
+
+    def V(p, z):
+        k = (round(p[0], 4), round(p[1], 4), round(z, 4))
+        if k not in cache:
+            cache[k] = bm.verts.new((p[0], p[1], z))
+        return cache[k]
+
+    def face(vs):
+        u = []
+        for v in vs:
+            if not u or u[-1] is not v:
+                u.append(v)
+        if len(u) > 1 and u[0] is u[-1]:
+            u.pop()
+        if len(set(u)) < 3:
+            return
+        try:
+            bm.faces.new(u)
+        except ValueError:
+            pass
+    P0 = levels[0]["P"]
+    face([V(p, 0.0) for p in reversed(P0)])
+    for k, lv in enumerate(levels):
+        P, n = lv["P"], len(lv["P"])
+        for i in range(n):
+            a_, b_ = P[i], P[(i + 1) % n]
+            face([V(a_, lv["z0"]), V(b_, lv["z0"]), V(b_, lv["z1"]), V(a_, lv["z1"])])
+        if k + 1 < len(levels):
+            Q = levels[k + 1]["P"]
+            for i in range(n):
+                j = (i + 1) % n
+                face([V(P[i], lv["z1"]), V(P[j], lv["z1"]), V(Q[j], lv["z1"]), V(Q[i], lv["z1"])])
+    face([V(p, floors * fh) for p in levels[-1]["P"]])
+    bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
+    me = bpy.data.meshes.new("CS2_Forma")
+    bm.to_mesh(me)
+    bm.free()
+    obj = bpy.data.objects.new("CS2_Forma", me)
+    ctx.scene.collection.objects.link(obj)
+    return obj
+
+
+def level_of(levels, z):
+    return next((k for k, lv in enumerate(levels) if z <= lv["z1"] + 1e-3), len(levels) - 1)
+
+
+
+_SCHEMA = {}
+
+
+def _fdesc(p):
+    d = dict(id=p.identifier, label=p.name, desc=p.description, type=p.type)
+    try:
+        if p.type == "ENUM":
+            d["items"] = [[i.identifier, i.name] for i in p.enum_items]
+            d["default"] = p.default
+        elif p.type in ("INT", "FLOAT"):
+            if p.type == "FLOAT" and p.subtype in ("COLOR", "COLOR_GAMMA"):
+                d["type"] = "COLOR"
+                d["default"] = list(p.default_array)
+            else:
+                d.update(min=p.hard_min, max=p.hard_max, smin=p.soft_min, smax=p.soft_max, default=p.default, unit=p.unit)
+        elif p.type == "BOOLEAN":
+            d["default"] = p.default
+    except Exception:
+        d["items"] = d.get("items") or []
+    return d
+
+
+def schema():
+    """Opciones del add-on tal como las muestran sus cuadros de componentes: por componente, grupos de campos con propiedad del edificio (g)
+    y/o de la pared (w), con tipo, límites, opciones y valor por defecto."""
+    if _SCHEMA:
+        return _SCHEMA
+    if not hasattr(bpy.types.Scene, "cs2_building"):
+        a.register()
+    gp = {p.identifier: p for p in a.CS2BuildingProps.bl_rna.properties}
+    wp = {p.identifier: p for p in a.CS2WallProps.bl_rna.properties}
+    comps, w2g, wmodes = [], {}, {}
+    for c in a._componentes():
+        groups = []
+        for title, fields, _cond in c["groups"]:
+            fl = []
+            for f in fields:
+                g, w = f.get("g"), f.get("w")
+                if c["key"] == "roof":
+                    w = None            # los ajustes de techo por cara no se editan acá
+                if g not in gp:
+                    g = None
+                if w not in wp:
+                    w = None
+                if not g and not w:
+                    continue
+                d = _fdesc(gp[g] if g else wp[w])
+                d["g"], d["w"] = g, w
+                if g and w:
+                    w2g[w] = g
+                fl.append(d)
+            if fl:
+                groups.append(dict(title=title, fields=fl))
+        for attr, prop in (c.get("wall_modes") or []):
+            wmodes[prop] = attr
+        comps.append(dict(key=c["key"], label=c["label"], desc=c.get("desc", ""), groups=groups, wall=any(f["w"] for g in groups for f in g["fields"]),
+                          only_all=bool(c.get("only_all"))))
+    def extra(key, label, tab, names, desc=""):
+        fl = []
+        for n in names:
+            if n in gp:
+                d = _fdesc(gp[n])
+                d["g"], d["w"] = n, None
+                fl.append(d)
+        return dict(key=key, label=label, desc=desc, groups=[dict(title="", fields=fl)] if fl else [], wall=False, only_all=True, tab=tab)
+    mats = [("facade", "Pared A (fachada)"), ("facb", "Material B"), ("facc", "Material C"), ("facd", "Material D"), ("trim", "Molduras y marcos"),
+            ("roof", "Techo"), ("door", "Puertas"), ("gar", "Portones de garaje"), ("rail", "Barandas, rejas y metal")]
+    for m, lab in mats:
+        comps.append(extra("mat_" + m, lab, "mat", [f"ms_{m}_{k}" for k in ("tint", "tile", "rot", "metal", "gloss", "nstr", "aostr", "emis_col", "emis_str", "cmask", "snow")]))
+    comps.append(extra("colors", "Colores", "mat", ["facade_color", "mat_b_color", "mat_c_color", "mat_d_color", "trim_color", "roof_color", "door_color", "gar_color", "rail_color"]))
+    comps.append(extra("project", "Proyecto y juego", "proj", ["theme", "level", "asset_category", "zone_type", "win_rooms", "seed", "variation", "floors_jitter"]))
+    comps.append(extra("tex", "Texturas y UV", "proj", ["tex_size", "tex_mode", "uv_tile", "uv_smart", "uv_same_density", "uv_group", "bake_ao", "bake_ao_str", "bake_dist", "bake_samples", "bake_margin", "tex_share_lods"]))
+    comps.append(extra("misc", "Geometría general", "proj", ["curve_deg", "roof_height", "roof_box", "roof_geo_tiles", "clean_on_generate", "clean_on_export", "snap_floors"]))
+    for c in comps:
+        c.setdefault("tab", "opt")
+    _SCHEMA.update(comps=comps, w2g=w2g, wmodes=wmodes)
+    return _SCHEMA
+
+
+def style_schema():
+    """Parámetros de los estilos (ventana, puerta, balcón, muro cortina) con sus grupos, tipos, límites y valores por defecto."""
+    if not hasattr(bpy.types.Scene, "cs2_building"):
+        a.register()
+    sp = {p.identifier: p for p in a.CS2StyleProps.bl_rna.properties}
+    out = {}
+    for kind in ("window", "door", "balcony"):
+        groups = []
+        for title, keys, _cond in a._style_groups(kind):
+            fl = []
+            for k in keys:
+                p = sp.get(k[2:] if k.startswith("e_") else k)
+                if p is None:
+                    continue
+                d = _fdesc(p)
+                d["id"] = k[2:] if k.startswith("e_") else k
+                d["default"] = a.STYLE_DEFAULT.get(d["id"], d.get("default"))
+                fl.append(d)
+            if fl:
+                groups.append(dict(title=title, fields=fl))
+        out[kind] = groups
+    return out
+
+
+def register_custom(custom):
+    """Estilos propios del proyecto: copias de un estilo base con parámetros cambiados, vivos solo en esta sesión del motor."""
+    a.lib_ensure()
+    for name, d in (custom or {}).items():
+        base = a.get_style(d.get("base") or "")
+        if base is None or name in a._LIB["styles"] and name not in a._LIB["user"] and name not in _CUSTOM:
+            continue
+        st = dict(base)
+        st.update(d.get("params") or {})
+        st = {**a.STYLE_DEFAULT, **a.clean_style(st)}
+        st["kind"] = base["kind"]
+        a._LIB["styles"][name] = st
+        if name not in a._LIB["names"]:
+            a._LIB["names"].append(name)
+        a._LIB["ids"][a.style_id(name)] = name
+        _CUSTOM.add(name)
+
+
+_CUSTOM = set()
+
+
+def _wall_attr_maps():
+    ints, floats, grp = {}, {}, {}
+    for gname, g in a.WALL_GROUPS.items():
+        for prop, attr in g["ints"].items():
+            ints[prop] = attr
+            grp[prop] = gname
+        for prop, attr in g["floats"].items():
+            floats[prop] = attr
+            grp[prop] = gname
+    return ints, floats, grp
+
+
+def _setprop(s, k, v):
+    """Escribe una propiedad del edificio con el tipo que espera Blender."""
+    p = a.CS2BuildingProps.bl_rna.properties[k]
+    if p.type == "ENUM":
+        v = str(v)
+    elif p.type == "INT":
+        v = int(v)
+    elif p.type == "FLOAT" and p.array_length:
+        v = tuple(float(x) for x in v)
+    elif p.type == "FLOAT":
+        v = float(v)
+    elif p.type == "BOOLEAN":
+        v = bool(v)
+    setattr(s, k, v)
+
+
+def apply_wall_props(f, lays, wpd, s):
+    """Pone en una cara (pared) los ajustes propios `wpd` {propiedad de pared: valor}; el resto de su grupo toma el valor general."""
+    sc = schema()
+    ints, floats, grp = _wall_attr_maps()
+    groups = set()
+    for prop, v in wpd.items():
+        if prop in sc["wmodes"]:
+            f[lays[sc["wmodes"][prop]]] = int(v)
+        elif prop in ("win_auto", "win_count"):
+            groups.add("win")
+        elif prop in grp:
+            groups.add(grp[prop])
+    for gname in groups:
+        g = a.WALL_GROUPS[gname]
+        f[lays["cs2_flags"]] = f[lays["cs2_flags"]] | g["flag"]
+        for prop, attr in list(g["ints"].items()) + list(g["floats"].items()):
+            if prop in wpd:
+                v = wpd[prop]
+            elif prop in sc["w2g"] and hasattr(s, sc["w2g"][prop]):
+                v = getattr(s, sc["w2g"][prop])
+            else:
+                v = a.CS2WallProps.bl_rna.properties[prop].default
+            f[lays[attr]] = int(v) if attr in ints.values() and prop in ints else float(v)
+        if gname == "win":
+            auto = wpd.get("win_auto", True)
+            cnt = int(wpd.get("win_count", 0))
+            f[lays["cs2_w_count"]] = 0 if auto else (cnt if cnt > 0 else -1)
+        if gname == "bal" and not int(f[lays["cs2_bal_mode"]]):
+            f[lays["cs2_bal_mode"]] = 2
+
+
+def hidden_props(s):
+    """Propiedades del edificio que el add-on esconde hoy (su condición `vis` da falso)."""
+    out = []
+    for c in a._componentes():
+        for _t, fields, _c in c["groups"]:
+            for f in fields:
+                vis = f.get("vis")
+                if vis and f.get("g"):
+                    try:
+                        if not vis(s):
+                            out.append(f["g"])
+                    except Exception:
+                        pass
+    return out
+
+
+def prepare(rec):
+    """Arma la forma con los ajustes por pared y las ediciones de ranuras. Devuelve (s, obj, info) sin generar el edificio."""
+    if not hasattr(bpy.types.Scene, "cs2_building"):
+        a.register()
+    ctx = bpy.context
+    s = ctx.scene.cs2_building
+    _clean()
+    s.live_update = False
+    verts = [tuple(v) for v in rec["verts"]]
+    edges = list(rec.get("edges") or [])
+    edges += [{}] * (len(verts) - len(edges))
+    if area(verts) < 0:                      # la planta tiene que ser antihoraria: se invierten también los bordes
+        verts.reverse()
+        edges = [dict(e) for e in reversed(edges)]
+        edges = edges[1:] + edges[:1]
+    floors, fh = int(rec.get("floors", 3)), float(rec.get("floor_h", 3.0))
+    register_custom(rec.get("custom_styles"))
+    s.building_name = rec.get("name") or "Edificio01"
+    s.floors, s.floor_height = floors, fh
+    if rec.get("roof"):
+        s.r_preset = rec["roof"]            # primero el modelo de techo: él pone sus valores y después se aplican los cambios sueltos
+    ok = GLOBAL_PROPS | {f["g"] for c in schema()["comps"] for g in c["groups"] for f in g["fields"] if f["g"]}
+    for k, v in (rec.get("props") or {}).items():
+        if k in ok and k != "r_preset":
+            try:
+                _setprop(s, k, v)
+            except Exception as ex:
+                print("propiedad ignorada", k, v, ex)
+    pts, owner, facets = expand(verts, edges)
+    levels = make_levels(pts, owner, facets, len(verts), floors, fh, rec.get("setbacks"))
+    if len(levels) == 1:
+        obj = a.create_shape_object(ctx, "BOX", 1, 1, floors * fh, 0.0, pts=pts)
+    else:
+        obj = stepped_shape(ctx, levels, floors, fh)
+    # ajustes por pared (atributos de cara)
+    bm = bmesh.new()
+    bm.from_mesh(obj.data)
+    lays = a.wall_layers(bm, create=True)
+    for f in bm.faces:
+        if abs(f.normal.z) > 0.12:
+            continue
+        c = f.calc_center_median()
+        P = levels[level_of(levels, c.z)]["P"]
+        i = min(range(len(P)), key=lambda j: _dist_seg((c.x, c.y), (P[j], P[(j + 1) % len(P)])))
+        e = edges[owner[i]]
+        if e.get("mat"):
+            f[lays["cs2_f_mat"]] = int(e["mat"])
+        if e.get("rot"):
+            f[lays["cs2_f_rot"]] = int(e["rot"])
+        if e.get("wp"):
+            apply_wall_props(f, lays, e["wp"], s)
+        for key, attr in (("ws", "cs2_w_style"), ("ds", "cs2_d_style"), ("bs", "cs2_b_style")):
+            if e.get(key):
+                f[lays[attr]] = a.STYLE_ID_NONE if e[key] == "__NONE__" else a.style_id(e[key])
+    bm.to_mesh(obj.data)
+    bm.free()
+    s.shape_object = obj
+    s.mode = "shape"
+    return s, obj, dict(verts=verts, edges=edges, pts=pts, owner=owner, facets=facets, floors=floors, fh=fh, levels=levels)
+
+
+def wall_index(shape, info):
+    """Para cada (borde de la planta, tramo de altura), el índice de una pared de `shape` que le corresponde."""
+    c = shape["center"]
+    found = {}
+    lv = info["levels"]
+    for idx, (wp, n, cfg) in enumerate(shape["walls"]):
+        m = sum((q for q in wp), Vector((0, 0, 0))) / len(wp) + c
+        zmin = min(q.z for q in wp) + c.z
+        k = min(range(len(lv)), key=lambda t: abs(lv[t]["z0"] - zmin))
+        P = lv[k]["P"]
+        i = min(range(len(P)), key=lambda j: _dist_seg((m.x, m.y), (P[j], P[(j + 1) % len(P)])))
+        found.setdefault((info["owner"][i], k), idx)
+    return found
+
+
+def build(rec):
+    s, obj, info = prepare(rec)
+    shape = a.load_shape_for(s)
+    p = a.props_to_params(s)
+    p["width"], p["depth"] = shape["size"].x, shape["size"].y
+    widx = wall_index(shape, info)
+    data = {"walls": []}
+    layouts = {}
+    def edits_of(ei, sec):
+        e = info["edges"][ei]
+        return e if sec == 0 else ((e.get("sx") or {}).get(str(sec)) or {})
+    for (ei, sec), idx in widx.items():
+        lay = a.slot_layout(p, shape, idx)
+        layouts[(ei, sec)] = lay
+        e = edits_of(ei, sec)
+        if e.get("ov") or e.get("add"):
+            data["walls"].append({"key": list(lay["key"]), "ov": dict(e.get("ov") or {}), "add": list(e.get("add") or [])})
+    a.slot_edits_save(obj, data)
+    bpy.ops.cs2.generate()
+    s = bpy.context.scene.cs2_building
+    main = a._main_obj(s)
+    me = main.data
+    me.calc_loop_triangles()
+    out = {"tris": len(me.loop_triangles), "center": [shape["center"].x, shape["center"].y]}
+    out["v"] = [round(c, 3) for vt in me.vertices for c in vt.co]
+    f, m = [], []
+    for t in me.loop_triangles:
+        f.extend(t.vertices)
+        m.append(t.material_index)
+    out["f"], out["m"] = f, m
+    out["mats"] = [sl.material.name.split("_", 1)[-1] if sl.material else "" for sl in main.material_slots]
+    out["cols"] = {sl.material.name.split("_", 1)[-1]: [round(c, 3) for c in sl.material.diffuse_color[:3]] for sl in main.material_slots if sl.material}
+    edata = a.slot_edits_load(obj)
+    walls = []
+    for (ei, sec), lay in sorted(layouts.items(), key=lambda kv: (kv[0][1], kv[0][0])):
+        ent = a.slot_edits_match(edata, lay["key"])
+        d = lay["defaults"]
+        slots = []
+        for sl in lay["slots"]:
+            ef = a.slot_effective(lay, ent, (sl["f"], sl["k"]))
+            ov = ((ent or {}).get("ov") or {}).get(f"{sl['f']},{sl['k']}", {})
+            if ef is None:
+                continue
+            slots.append(dict(id=f"{sl['f']},{sl['k']}", kind=ef["kind"], f=ef["f"], a0=ef["a0"], a1=ef["a1"],
+                              z0=lay["zmin"] + ef["f"] * d["fh"] + ef["sill"], z1=lay["zmin"] + ef["f"] * d["fh"] + ef["sill"] + ef["h"],
+                              style=ef["style"], edited=ef["edited"], deleted=bool(ov.get("del")) or ef["kind"] == "none"))
+        for i, ad in enumerate(((ent or {}).get("add")) or []):
+            ef = a.slot_effective(lay, ent, ("add", i))
+            if ef is None:
+                continue
+            zb = lay["zmin"] + ef["f"] * d["fh"]
+            slots.append(dict(id=f"add,{i}", kind=ef["kind"], f=ef["f"], a0=ef["a0"], a1=ef["a1"], z0=zb + ef["sill"], z1=zb + ef["sill"] + ef["h"],
+                              style=ef["style"], edited=True, deleted=False))
+        ch = (shape["walls"][widx[(ei, sec)]][2] or {}).get("_chain")
+        if ch:   # en una curva, puertas y balcones solo existen en las facetas que miran al frente (o si se piden en todas)
+            cfg = shape["walls"][widx[(ei, sec)]][2]
+            for sl_ in slots:
+                if sl_["kind"] in ("door", "bal") and not sl_["id"].startswith("add,"):
+                    c_, acc = (sl_["a0"] + sl_["a1"]) / 2, 0.0
+                    fac = ch["facets"][-1]
+                    for f_ in ch["facets"]:
+                        acc += math.hypot(f_["E"][0] - f_["S"][0], f_["E"][1] - f_["S"][1])
+                        if c_ <= acc:
+                            fac = f_
+                            break
+                    if not a._chain_keep_bal(p, cfg, fac["n"]):
+                        sl_["deleted"] = True
+        walls.append(dict(edge=ei, sec=sec, key=lay["key"], amin=lay["amin"], amax=lay["amax"], zmin=lay["zmin"], zmax=lay["zmax"], fh=d["fh"], nfl=lay["nfl"],
+                          defaults=d, slots=slots, facets=[[list(q0), list(q1)] for q0, q1 in info["levels"][sec]["facets"][ei]]))
+    out["walls"] = walls
+    out["hidden"] = hidden_props(s)
+    out["levels"] = [dict(z0=lv["z0"], z1=lv["z1"], poly=[list(q) for q in lv["P"]]) for lv in info["levels"]]
+    return out
+
+
+def catalog():
+    a.lib_ensure()
+    cat = {"window": [], "door": [], "balcony": []}
+    for n in a._LIB["names"]:
+        k = a._LIB["styles"][n].get("kind")
+        if k in cat:
+            cat[k].append({"name": n, "thumb": "thumbs/" + slug(n) + ".png", "user": n in a._LIB["user"]})
+    cat["roofs"] = [{"id": k, "label": v[0]} for k, v in a.ROOF_PRESETS.items()]
+    cat["looks"] = [{"id": k, "label": v[0], "props": {pk: (list(pv) if isinstance(pv, tuple) else pv) for pk, pv in v[1].items()}} for k, v in a.LOOK_PRESETS.items()]
+    cat["facades"] = [{"id": k, "label": v[0], "desc": v[1], "props": {pk: (list(pv) if isinstance(pv, tuple) else pv) for pk, pv in v[2].items()},
+                       "floors": v[3]["floors"], "floor_h": v[3]["floor_height"], "thumb": "thumbs/facade_" + k + ".png"} for k, v in a.FACADE_TYPES.items()]
+    cat["facade_base"] = {k: (list(v) if isinstance(v, tuple) else v) for k, v in a.FACADE_BASE.items()}
+    cat["mats"] = [{"id": i, "label": l} for i, l in ((0, "Igual al edificio"), (1, "A · fachada"), (2, "B · ladrillo"), (3, "C · gris oscuro"), (4, "D · madera"))]
+    return cat
+
+
+def export(rec):
+    """Arma el edificio y exporta LODs, UV y FBX con el add-on a la carpeta pedida."""
+    out = os.path.expanduser(rec.get("out") or "").strip()
+    if not out:
+        raise RuntimeError("Falta elegir la carpeta de salida")
+    os.makedirs(out, exist_ok=True)
+    build(rec)
+    s = bpy.context.scene.cs2_building
+    s.export_dir = out
+    res = bpy.ops.cs2.export()
+    if "FINISHED" not in res:
+        raise RuntimeError("El add-on no pudo exportar (mirá la consola del motor)")
+    objs = a._lod_objs(s)
+    warn = [t for t, ok in a.lod_report(objs) if not ok] if objs else []
+    return {"tris": [a.mesh_tris(o) for o in objs] if objs else [], "warn": warn, "path": os.path.abspath(out)}
+
+
+def slug(name):
+    import re
+    return re.sub(r"[^A-Za-z0-9_-]+", "_", name)
+
+
+JOBS = queue.Queue()
+
+
+def run_in_main(fn, rec):
+    """Blender (bpy) solo es confiable en el hilo principal: los pedidos HTTP esperan su turno en una cola."""
+    done = threading.Event()
+    box = {}
+    JOBS.put((fn, rec, box, done))
+    done.wait()
+    if "err" in box:
+        raise box["err"]
+    return box["ok"]
+
+
+class H(http.server.BaseHTTPRequestHandler):
+    def _send(self, code, body, ctype="application/json"):
+        b = body if isinstance(body, bytes) else body.encode()
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(b)))
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(b)
+
+    def do_OPTIONS(self):
+        self.send_response(204)
+        for k, v in (("Access-Control-Allow-Origin", "*"), ("Access-Control-Allow-Headers", "*"), ("Access-Control-Allow-Methods", "GET,POST")):
+            self.send_header(k, v)
+        self.end_headers()
+
+    def do_GET(self):
+        p = self.path.split("?")[0]
+        if p == "/style_schema":
+            return self._send(200, json.dumps(run_in_main(lambda _r: style_schema(), None)))
+        if p == "/style":
+            from urllib.parse import parse_qs, urlparse
+            nm = parse_qs(urlparse(self.path).query).get("name", [""])[0]
+            return self._send(200, json.dumps(run_in_main(lambda _r: {k: v for k, v in (a.get_style(nm) or {}).items()}, None)))
+        if p == "/schema":
+            return self._send(200, json.dumps(run_in_main(lambda _r: schema(), None)))
+        if p == "/catalog":
+            return self._send(200, json.dumps(run_in_main(lambda _r: catalog(), None)))
+        if p == "/":
+            p = "/editor.html"
+        f = os.path.normpath(os.path.join(HERE, p.lstrip("/")))
+        if not f.startswith(HERE) or not os.path.isfile(f):
+            return self._send(404, "no existe", "text/plain")
+        ct = {"html": "text/html", "js": "text/javascript", "png": "image/png", "json": "application/json"}.get(f.rsplit(".", 1)[-1], "application/octet-stream")
+        self._send(200, open(f, "rb").read(), ct + ("; charset=utf-8" if ct.startswith("text") else ""))
+
+    def do_POST(self):
+        fn = {"/build": build, "/export": export}.get(self.path)
+        if fn is None:
+            return self._send(404, "{}")
+        try:
+            rec = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))))
+            self._send(200, json.dumps(run_in_main(fn, rec)))
+        except Exception as e:  # el editor muestra el mensaje
+            self._send(500, json.dumps({"error": str(e)}))
+
+    def log_message(self, *args):
+        pass
+
+
+class Srv(http.server.ThreadingHTTPServer):
+    allow_reuse_address = False      # en Windows, con True otra instancia podía quedarse con las conexiones y el navegador veía una respuesta vacía
+    daemon_threads = True
+
+    def handle_error(self, request, client_address):
+        import traceback
+        traceback.print_exc()
+
+
+if __name__ == "__main__":
+    port0 = int(sys.argv[sys.argv.index("--port") + 1]) if "--port" in sys.argv else 8765
+    srv = None
+    for port in range(port0, port0 + 20):
+        try:
+            srv = Srv(("127.0.0.1", port), H)
+            break
+        except OSError:
+            print(f"El puerto {port} está ocupado (¿hay otro motor abierto?), pruebo el siguiente…", flush=True)
+    if srv is None:
+        raise SystemExit("No encontré un puerto libre. Cerrá las otras ventanas del motor y probá de nuevo.")
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    print(f"Motor listo en http://127.0.0.1:{port}  (Ctrl+C para cerrar)", flush=True)
+    if "--open" in sys.argv:
+        import webbrowser
+        webbrowser.open(f"http://127.0.0.1:{port}/")
+    try:
+        while True:
+            fn, rec, box, done = JOBS.get()
+            try:
+                box["ok"] = fn(rec)
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                box["err"] = e
+            done.set()
+    except KeyboardInterrupt:
+        pass

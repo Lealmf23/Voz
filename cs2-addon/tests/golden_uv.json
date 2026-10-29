@@ -1,0 +1,38 @@
+{
+ "L-LOD0": {
+  "islas": 391,
+  "px_por_m": 20.9,
+  "uso": 73.2,
+  "compartidas": 5218
+ },
+ "L-LOD1": {
+  "islas": 391,
+  "px_por_m": 7.3,
+  "uso": 73.2,
+  "compartidas": 5218
+ },
+ "L-LOD2": {
+  "islas": 16,
+  "px_por_m": 11.1,
+  "uso": 67.1,
+  "compartidas": 62
+ },
+ "U-LOD0": {
+  "islas": 494,
+  "px_por_m": 14.6,
+  "uso": 69.1,
+  "compartidas": 10560
+ },
+ "U-LOD1": {
+  "islas": 494,
+  "px_por_m": 5.1,
+  "uso": 69.1,
+  "compartidas": 10560
+ },
+ "U-LOD2": {
+  "islas": 21,
+  "px_por_m": 8.0,
+  "uso": 71.7,
+  "compartidas": 99
+ }
+}
